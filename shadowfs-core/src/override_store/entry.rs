@@ -12,6 +12,8 @@ pub enum OverrideContent {
     File {
         data: Bytes,
         content_hash: [u8; 32],
+        /// Whether the data is compressed
+        is_compressed: bool,
     },
     /// Directory with list of entries
     Directory {
@@ -74,6 +76,57 @@ impl Clone for OverrideEntry {
             override_metadata: self.override_metadata.clone(),
             created_at: self.created_at,
             last_accessed: AtomicU64::new(self.last_accessed.load(Ordering::Relaxed)),
+        }
+    }
+}
+
+impl OverrideEntry {
+    /// Gets the file data, decompressing if necessary
+    pub fn get_file_data(&self) -> Result<Option<Bytes>, crate::error::ShadowError> {
+        match &self.content {
+            OverrideContent::File { data, is_compressed, .. } => {
+                if *is_compressed {
+                    use crate::override_store::compression;
+                    compression::decompress(data)
+                        .map(Some)
+                        .map_err(|e| crate::error::ShadowError::Io { 
+                            message: format!("Failed to decompress data: {}", e) 
+                        })
+                } else {
+                    Ok(Some(data.clone()))
+                }
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// Checks if this entry represents a file
+    pub fn is_file(&self) -> bool {
+        matches!(self.content, OverrideContent::File { .. })
+    }
+
+    /// Checks if this entry represents a directory
+    pub fn is_directory(&self) -> bool {
+        matches!(self.content, OverrideContent::Directory { .. })
+    }
+
+    /// Checks if this entry represents a deleted item
+    pub fn is_deleted(&self) -> bool {
+        matches!(self.content, OverrideContent::Deleted)
+    }
+
+    /// Gets the uncompressed size of the entry data
+    pub fn uncompressed_size(&self) -> u64 {
+        match &self.content {
+            OverrideContent::File { data, is_compressed, .. } => {
+                if *is_compressed {
+                    // For compressed data, return the override_metadata size
+                    self.override_metadata.size
+                } else {
+                    data.len() as u64
+                }
+            }
+            _ => self.override_metadata.size,
         }
     }
 }
