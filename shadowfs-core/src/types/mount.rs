@@ -148,7 +148,7 @@ impl std::hash::Hash for MountHandle {
 }
 
 /// Configuration options for mounting a shadow filesystem.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MountOptions {
     /// Whether the mount should be read-only
     pub read_only: bool,
@@ -345,7 +345,7 @@ impl MountOptionsBuilder {
 }
 
 /// Configuration for the filesystem cache.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct CacheConfig {
     /// Whether caching is enabled
     pub enabled: bool,
@@ -402,7 +402,7 @@ impl CacheConfig {
 }
 
 /// Configuration for the override store.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct OverrideConfig {
     /// Maximum memory usage for overrides in bytes
     pub max_memory_bytes: usize,
