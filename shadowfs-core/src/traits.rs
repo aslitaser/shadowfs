@@ -6,7 +6,7 @@
 use async_trait::async_trait;
 use crate::types::{
     ShadowPath, FileHandle, FileMetadata, DirectoryEntry, 
-    OperationResult, OpenFlags
+    OperationResult, OpenFlags, Bytes
 };
 
 /// Handle representing a mounted filesystem.
@@ -164,6 +164,61 @@ pub trait FileSystem: Send + Sync {
     /// # Returns
     /// A vector of directory entries, one for each item in the directory.
     async fn read_directory(&self, path: &ShadowPath) -> OperationResult<Vec<DirectoryEntry>>;
+}
+
+/// Trait for managing file content overrides in memory.
+///
+/// This trait provides an interface for storing and retrieving file content
+/// overrides that shadow the real filesystem. When a file has an override,
+/// operations return the override content instead of reading from disk.
+pub trait OverrideProvider: Send + Sync {
+    /// Sets or updates an override for a file at the given path.
+    ///
+    /// # Arguments
+    /// * `path` - Path to override
+    /// * `content` - New content for the file, or `None` to mark as deleted
+    ///
+    /// # Notes
+    /// - If `content` is `Some(bytes)`, the file is overridden with the given content
+    /// - If `content` is `None`, the file is marked as deleted in the override layer
+    fn set_override(&mut self, path: ShadowPath, content: Option<Bytes>);
+
+    /// Gets the override content for a file if one exists.
+    ///
+    /// # Arguments
+    /// * `path` - Path to check for overrides
+    ///
+    /// # Returns
+    /// - `Some(&Bytes)` if the file has override content
+    /// - `None` if the file has no override (use real filesystem)
+    fn get_override(&self, path: &ShadowPath) -> Option<&Bytes>;
+
+    /// Checks if a path has any override (content or deletion marker).
+    ///
+    /// # Arguments
+    /// * `path` - Path to check
+    ///
+    /// # Returns
+    /// `true` if the path has any kind of override, `false` otherwise
+    fn has_override(&self, path: &ShadowPath) -> bool;
+
+    /// Removes an override for the given path.
+    ///
+    /// # Arguments
+    /// * `path` - Path whose override should be removed
+    ///
+    /// # Returns
+    /// `true` if an override was removed, `false` if no override existed
+    fn clear_override(&mut self, path: &ShadowPath) -> bool;
+
+    /// Removes all overrides, resetting to a clean state.
+    fn clear_all_overrides(&mut self);
+
+    /// Returns the number of paths that have overrides.
+    ///
+    /// # Returns
+    /// The count of overridden paths (including deletion markers)
+    fn override_count(&self) -> usize;
 }
 
 #[cfg(test)]
