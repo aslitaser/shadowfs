@@ -8,6 +8,7 @@ mod directory;
 mod persistence;
 mod optimization;
 mod stats;
+mod patterns;
 
 pub use entry::{OverrideEntry, OverrideContent};
 pub use memory::{MemoryTracker, MemoryGuard};
@@ -25,6 +26,11 @@ pub use optimization::{
 pub use stats::{
     OverrideStoreStats, StatsSnapshot, MemoryBreakdown, StatsReport,
     PerformanceMetrics, EfficiencyMetrics, AlertConfig, HotPathStats, EntryType
+};
+pub use patterns::{
+    OverrideRule, RuleSet, RulePriority, TransformChain, TransformFn, transforms,
+    OverrideCondition, OverrideTemplate, CowContent, ContentLoader, OverrideRuleEntry,
+    OverrideContentType, TransformError, TemplateError, CowError, ResolveError
 };
 
 use crate::types::{FileMetadata, ShadowPath, DirectoryEntry};

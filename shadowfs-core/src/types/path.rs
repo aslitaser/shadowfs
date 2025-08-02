@@ -73,6 +73,16 @@ impl ShadowPath {
         self.inner.file_name().and_then(|name| name.to_str()).map(String::from)
     }
     
+    /// Returns the file stem (filename without extension), if any.
+    pub fn file_stem(&self) -> Option<String> {
+        self.inner.file_stem().and_then(|name| name.to_str()).map(String::from)
+    }
+    
+    /// Returns the file extension, if any.
+    pub fn extension(&self) -> Option<String> {
+        self.inner.extension().and_then(|ext| ext.to_str()).map(String::from)
+    }
+    
     /// Joins this path with another path component.
     pub fn join<P: AsRef<Path>>(&self, path: P) -> ShadowPath {
         ShadowPath::new(self.inner.join(path))
