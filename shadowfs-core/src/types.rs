@@ -329,71 +329,228 @@ mod tests {
         let perms_writeable = FilePermissions::from_unix_mode(0o644);
         assert!(!perms_writeable.readonly);
     }
+
+    #[test]
+    fn test_open_flags_bitflags() {
+        let flags = OpenFlags::READ | OpenFlags::WRITE;
+        assert!(flags.contains(OpenFlags::READ));
+        assert!(flags.contains(OpenFlags::WRITE));
+        assert!(!flags.contains(OpenFlags::APPEND));
+
+        let mut flags2 = OpenFlags::CREATE;
+        flags2.insert(OpenFlags::TRUNCATE);
+        assert!(flags2.contains(OpenFlags::CREATE | OpenFlags::TRUNCATE));
+
+        let flags3 = OpenFlags::all();
+        assert!(flags3.contains(OpenFlags::READ));
+        assert!(flags3.contains(OpenFlags::WRITE));
+        assert!(flags3.contains(OpenFlags::APPEND));
+        assert!(flags3.contains(OpenFlags::CREATE));
+        assert!(flags3.contains(OpenFlags::TRUNCATE));
+        assert!(flags3.contains(OpenFlags::EXCLUSIVE));
+    }
+
+    #[test]
+    fn test_open_flags_operations() {
+        let flags1 = OpenFlags::READ | OpenFlags::WRITE;
+        let flags2 = OpenFlags::WRITE | OpenFlags::CREATE;
+        
+        let union = flags1 | flags2;
+        assert!(union.contains(OpenFlags::READ));
+        assert!(union.contains(OpenFlags::WRITE));
+        assert!(union.contains(OpenFlags::CREATE));
+        
+        let intersection = flags1 & flags2;
+        assert!(!intersection.contains(OpenFlags::READ));
+        assert!(intersection.contains(OpenFlags::WRITE));
+        assert!(!intersection.contains(OpenFlags::CREATE));
+        
+        let difference = flags1 - flags2;
+        assert!(difference.contains(OpenFlags::READ));
+        assert!(!difference.contains(OpenFlags::WRITE));
+        assert!(!difference.contains(OpenFlags::CREATE));
+    }
+
+    #[test]
+    fn test_open_flags_from_bits() {
+        let flags = OpenFlags::from_bits(0b000011).unwrap();
+        assert!(flags.contains(OpenFlags::READ));
+        assert!(flags.contains(OpenFlags::WRITE));
+        
+        let invalid = OpenFlags::from_bits(0b1000000);
+        assert!(invalid.is_none());
+        
+        let truncated = OpenFlags::from_bits_truncate(0b1000011);
+        assert!(truncated.contains(OpenFlags::READ));
+        assert!(truncated.contains(OpenFlags::WRITE));
+        assert_eq!(truncated.bits(), 0b000011);
+    }
 }
 
 /// A handle to an open file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FileHandle(pub u64);
 
-/// Flags for opening a file.
+/// Flags for opening a file using bitflags.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct OpenFlags {
-    /// Whether to open for reading
-    pub read: bool,
-    /// Whether to open for writing
-    pub write: bool,
-    /// Whether to create the file if it doesn't exist
-    pub create: bool,
-    /// Whether to truncate the file on open
-    pub truncate: bool,
-    /// Whether to append to the file
-    pub append: bool,
-    /// Whether to create a new file (fail if exists)
-    pub create_new: bool,
-}
+pub struct OpenFlags(u32);
 
 impl OpenFlags {
-    /// Creates a new OpenFlags instance with all flags set to false.
-    pub fn new() -> Self {
-        Self {
-            read: false,
-            write: false,
-            create: false,
-            truncate: false,
-            append: false,
-            create_new: false,
+    /// Read access flag
+    pub const READ: Self = Self(1 << 0);
+    /// Write access flag
+    pub const WRITE: Self = Self(1 << 1);
+    /// Append mode flag
+    pub const APPEND: Self = Self(1 << 2);
+    /// Create file if it doesn't exist
+    pub const CREATE: Self = Self(1 << 3);
+    /// Truncate file to zero length
+    pub const TRUNCATE: Self = Self(1 << 4);
+    /// Exclusive creation (fail if file exists)
+    pub const EXCLUSIVE: Self = Self(1 << 5);
+
+    /// Creates an empty set of flags.
+    pub const fn empty() -> Self {
+        Self(0)
+    }
+
+    /// Creates a set containing all flags.
+    pub const fn all() -> Self {
+        Self(Self::READ.0 | Self::WRITE.0 | Self::APPEND.0 | Self::CREATE.0 | Self::TRUNCATE.0 | Self::EXCLUSIVE.0)
+    }
+
+    /// Returns the raw value of the flags.
+    pub const fn bits(&self) -> u32 {
+        self.0
+    }
+
+    /// Creates flags from raw bits.
+    pub const fn from_bits(bits: u32) -> Option<Self> {
+        if bits & !Self::all().0 == 0 {
+            Some(Self(bits))
+        } else {
+            None
         }
     }
 
-    /// Creates flags for read-only access.
-    pub fn read_only() -> Self {
-        Self {
-            read: true,
-            ..Self::new()
-        }
+    /// Creates flags from raw bits, truncating invalid bits.
+    pub const fn from_bits_truncate(bits: u32) -> Self {
+        Self(bits & Self::all().0)
     }
 
-    /// Creates flags for write-only access.
-    pub fn write_only() -> Self {
-        Self {
-            write: true,
-            ..Self::new()
-        }
+    /// Returns true if no flags are set.
+    pub const fn is_empty(&self) -> bool {
+        self.0 == 0
     }
 
-    /// Creates flags for read-write access.
-    pub fn read_write() -> Self {
-        Self {
-            read: true,
-            write: true,
-            ..Self::new()
-        }
+    /// Returns true if all flags in `other` are set.
+    pub const fn contains(&self, other: Self) -> bool {
+        self.0 & other.0 == other.0
+    }
+
+    /// Inserts the specified flags.
+    pub fn insert(&mut self, other: Self) {
+        self.0 |= other.0;
+    }
+
+    /// Removes the specified flags.
+    pub fn remove(&mut self, other: Self) {
+        self.0 &= !other.0;
+    }
+
+    /// Toggles the specified flags.
+    pub fn toggle(&mut self, other: Self) {
+        self.0 ^= other.0;
+    }
+
+    /// Returns the union of the flags.
+    pub const fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+
+    /// Returns the intersection of the flags.
+    pub const fn intersection(self, other: Self) -> Self {
+        Self(self.0 & other.0)
+    }
+
+    /// Returns the difference of the flags.
+    pub const fn difference(self, other: Self) -> Self {
+        Self(self.0 & !other.0)
+    }
+
+    /// Returns the symmetric difference of the flags.
+    pub const fn symmetric_difference(self, other: Self) -> Self {
+        Self(self.0 ^ other.0)
+    }
+
+    /// Returns the complement of the flags.
+    pub const fn complement(self) -> Self {
+        Self(!self.0 & Self::all().0)
     }
 }
 
 impl Default for OpenFlags {
     fn default() -> Self {
-        Self::new()
+        Self::empty()
+    }
+}
+
+impl std::ops::BitOr for OpenFlags {
+    type Output = Self;
+    fn bitor(self, rhs: Self) -> Self {
+        self.union(rhs)
+    }
+}
+
+impl std::ops::BitOrAssign for OpenFlags {
+    fn bitor_assign(&mut self, rhs: Self) {
+        self.insert(rhs);
+    }
+}
+
+impl std::ops::BitAnd for OpenFlags {
+    type Output = Self;
+    fn bitand(self, rhs: Self) -> Self {
+        self.intersection(rhs)
+    }
+}
+
+impl std::ops::BitAndAssign for OpenFlags {
+    fn bitand_assign(&mut self, rhs: Self) {
+        *self = self.intersection(rhs);
+    }
+}
+
+impl std::ops::BitXor for OpenFlags {
+    type Output = Self;
+    fn bitxor(self, rhs: Self) -> Self {
+        self.symmetric_difference(rhs)
+    }
+}
+
+impl std::ops::BitXorAssign for OpenFlags {
+    fn bitxor_assign(&mut self, rhs: Self) {
+        *self = self.symmetric_difference(rhs);
+    }
+}
+
+impl std::ops::Sub for OpenFlags {
+    type Output = Self;
+    fn sub(self, rhs: Self) -> Self {
+        self.difference(rhs)
+    }
+}
+
+impl std::ops::SubAssign for OpenFlags {
+    fn sub_assign(&mut self, rhs: Self) {
+        *self = self.difference(rhs);
+    }
+}
+
+impl std::ops::Not for OpenFlags {
+    type Output = Self;
+    fn not(self) -> Self {
+        self.complement()
     }
 }
 
