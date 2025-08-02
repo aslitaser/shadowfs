@@ -354,6 +354,7 @@ mod tests {
                 content: OverrideContent::File {
                     data: Bytes::from(vec![0u8; 100]),
                     content_hash: [0u8; 32],
+                    is_compressed: false,
                 },
                 original_metadata: None,
                 override_metadata: FileMetadata {
@@ -401,6 +402,7 @@ mod tests {
                 content: OverrideContent::File {
                     data: Bytes::from(vec![0u8; 100]),
                     content_hash: [0u8; 32],
+                    is_compressed: false,
                 },
                 original_metadata: None,
                 override_metadata: FileMetadata {
@@ -454,6 +456,7 @@ mod tests {
                     content: OverrideContent::File {
                         data: Bytes::from(vec![0u8; size]),
                         content_hash: [0u8; 32],
+                        is_compressed: false,
                     },
                     original_metadata: None,
                     override_metadata: FileMetadata {

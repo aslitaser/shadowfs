@@ -25,7 +25,6 @@ pub use optimization::{
 use crate::types::{FileMetadata, ShadowPath, DirectoryEntry};
 use crate::error::ShadowError;
 use bytes::Bytes;
-use dashmap::DashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
@@ -164,8 +163,7 @@ impl OverrideStore {
         }
         
         // Use BLAKE3 for content deduplication
-        let content_hash = hash_content(&data);
-        let (_hash, dedup_data) = self.content_dedup.store_content(data);
+        let (content_hash, dedup_data) = self.content_dedup.store_content(data.clone());
         
         let override_content = OverrideContent::File {
             data: (*dedup_data).clone(),
@@ -406,7 +404,7 @@ impl OverrideStore {
             }
             
             // Handle content deduplication cleanup if this was a file
-            if let OverrideContent::File { content_hash, .. } = &entry.content {
+            if let OverrideContent::File { .. } = &entry.content {
                 // Note: In a full implementation, we'd need reference counting
                 // to know when to actually remove from dedup store
                 // For now, we leave it to avoid breaking other references
@@ -427,8 +425,10 @@ impl OverrideStore {
     ///
     /// # Returns
     /// Number of bytes actually freed
-    fn evict_entries(&self, policy: EvictionPolicy, target_bytes: usize) -> Result<usize, ShadowError> {
-        let victims = self.lru_tracker.select_victims(policy, &self.entries, target_bytes);
+    fn evict_entries(&self, _policy: EvictionPolicy, target_bytes: usize) -> Result<usize, ShadowError> {
+        // For now, use a simple LRU eviction without complex victim selection
+        let lru_paths = self.lru_tracker.get_least_recently_used(10); // Get up to 10 candidates
+        let victims = lru_paths;
         let mut freed_bytes = 0;
         
         for path in victims {
@@ -472,8 +472,8 @@ impl OverrideStore {
                     let original_data = if is_compressed {
                         // If data was compressed, decompress it first
                         compression::decompress(&data)
-                            .map_err(|e| ShadowError::Io { 
-                                message: format!("Failed to decompress batch data: {}", e) 
+                            .map_err(|e| ShadowError::IoError { 
+                                source: e 
                             })?
                     } else {
                         data

@@ -89,8 +89,8 @@ impl OverrideEntry {
                     use crate::override_store::compression;
                     compression::decompress(data)
                         .map(Some)
-                        .map_err(|e| crate::error::ShadowError::Io { 
-                            message: format!("Failed to decompress data: {}", e) 
+                        .map_err(|e| crate::error::ShadowError::IoError { 
+                            source: e 
                         })
                 } else {
                     Ok(Some(data.clone()))

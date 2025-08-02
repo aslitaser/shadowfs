@@ -20,7 +20,7 @@ pub fn calculate_entry_size(entry: &OverrideEntry) -> usize {
     
     // Add content size
     size += match &entry.content {
-        OverrideContent::File { data, content_hash } => {
+        OverrideContent::File { data, content_hash, .. } => {
             calculate_bytes_size(data) + std::mem::size_of_val(content_hash)
         }
         OverrideContent::Directory { entries } => {
@@ -72,6 +72,7 @@ mod tests {
             content: OverrideContent::File {
                 data: Bytes::from(vec![0u8; 1000]),
                 content_hash: [0u8; 32],
+                is_compressed: false,
             },
             original_metadata: None,
             override_metadata: FileMetadata {

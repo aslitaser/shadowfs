@@ -107,7 +107,7 @@ impl<T> ReadThroughCache<T> {
 }
 
 /// Strategy for prefetching directory contents
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PrefetchStrategy {
     /// No prefetching
     None,
@@ -194,7 +194,7 @@ where
     /// Gets the shard index for a key
     fn shard_index(&self, key: &K) -> usize {
         use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
+        use std::hash::Hasher;
         
         let mut hasher = DefaultHasher::new();
         key.hash(&mut hasher);
@@ -309,9 +309,9 @@ mod tests {
     #[test]
     fn test_read_through_cache() {
         let cache: ReadThroughCache<String> = ReadThroughCache::new(2);
-        let path1 = ShadowPath::new("/test1");
-        let path2 = ShadowPath::new("/test2");
-        let path3 = ShadowPath::new("/test3");
+        let path1 = ShadowPath::new("/test1".into());
+        let path2 = ShadowPath::new("/test2".into());
+        let path3 = ShadowPath::new("/test3".into());
 
         let entry1 = Arc::new("entry1".to_string());
         let entry2 = Arc::new("entry2".to_string());

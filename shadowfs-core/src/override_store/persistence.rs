@@ -534,6 +534,7 @@ mod tests {
         let content = OverrideContent::File {
             data: Bytes::from("test data"),
             content_hash: [0u8; 32],
+            is_compressed: false,
         };
         let metadata = FileMetadata {
             size: 9,
@@ -636,6 +637,7 @@ mod tests {
         let content = OverrideContent::File {
             data: Bytes::from("test data"),
             content_hash: [0u8; 32],
+            is_compressed: false,
         };
         let metadata = FileMetadata {
             size: 9,
@@ -680,6 +682,7 @@ mod tests {
         let content = OverrideContent::File {
             data: Bytes::from("test data"),
             content_hash: [0u8; 32],
+            is_compressed: false,
         };
         let metadata = FileMetadata {
             size: 9,
