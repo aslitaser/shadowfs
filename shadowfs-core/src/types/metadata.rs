@@ -219,6 +219,21 @@ impl FileMetadata {
     }
 }
 
+impl Default for FileMetadata {
+    fn default() -> Self {
+        let now = SystemTime::now();
+        Self {
+            size: 0,
+            created: now,
+            modified: now,
+            accessed: now,
+            permissions: FilePermissions::default_file(),
+            file_type: FileType::File,
+            platform_specific: PlatformMetadata::default(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

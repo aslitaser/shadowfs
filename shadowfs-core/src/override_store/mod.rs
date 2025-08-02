@@ -7,6 +7,7 @@ mod size;
 mod directory;
 mod persistence;
 mod optimization;
+mod stats;
 
 pub use entry::{OverrideEntry, OverrideContent};
 pub use memory::{MemoryTracker, MemoryGuard};
@@ -20,6 +21,10 @@ pub use persistence::{
 pub use optimization::{
     ContentDeduplication, ReadThroughCache, PrefetchStrategy, 
     DirectoryPrefetcher, ShardedMap, hash_content, compression
+};
+pub use stats::{
+    OverrideStoreStats, StatsSnapshot, MemoryBreakdown, StatsReport,
+    PerformanceMetrics, EfficiencyMetrics, AlertConfig, HotPathStats, EntryType
 };
 
 use crate::types::{FileMetadata, ShadowPath, DirectoryEntry};
@@ -91,6 +96,9 @@ pub struct OverrideStore {
     /// Directory prefetcher
     pub(crate) prefetcher: Arc<RwLock<DirectoryPrefetcher>>,
     
+    /// Statistics tracker
+    pub(crate) stats: Arc<OverrideStoreStats>,
+    
     /// Runtime configuration that can be updated
     config: RwLock<OverrideStoreConfig>,
 }
@@ -108,6 +116,7 @@ impl OverrideStore {
         let content_dedup = Arc::new(ContentDeduplication::new());
         let hot_cache = Arc::new(ReadThroughCache::new(config.cache_size));
         let prefetcher = Arc::new(RwLock::new(DirectoryPrefetcher::new(config.prefetch_strategy)));
+        let stats = Arc::new(OverrideStoreStats::new());
         
         Self {
             entries,
@@ -117,6 +126,7 @@ impl OverrideStore {
             content_dedup,
             hot_cache,
             prefetcher,
+            stats,
             config: RwLock::new(config),
         }
     }
@@ -284,12 +294,40 @@ impl OverrideStore {
         let entry_arc = Arc::new(entry);
         
         // If replacing an existing entry, we don't need additional memory allocation
-        let old_entry = self.entries.insert(path.clone(), entry_arc);
+        let old_entry = self.entries.insert(path.clone(), entry_arc.clone());
         
-        // If this is a new entry (not a replacement), allocate memory
+        // Calculate stats for the new entry
+        let compression_saved = match &entry_arc.content {
+            OverrideContent::File { is_compressed, .. } if *is_compressed => {
+                // Estimate compression savings (would be more accurate with actual data)
+                entry_size / 4  // Assume 25% compression savings
+            },
+            _ => 0,
+        };
+        
+        let dedup_saved = 0; // Would need actual dedup tracking
+        
+        // If this is a new entry (not a replacement), allocate memory and update stats
         if old_entry.is_none() {
             let _guard = self.memory_tracker.try_allocate(entry_size)?;
             std::mem::forget(_guard); // Keep the allocation
+            
+            // Update stats for new entry
+            self.stats.update_on_insert(&entry_arc, entry_size, compression_saved, dedup_saved);
+        } else {
+            // For replacements, we need to handle the stats differently
+            if let Some(old) = &old_entry {
+                let old_size = calculate_entry_size(old);
+                let old_compression_saved = match &old.content {
+                    OverrideContent::File { is_compressed, .. } if *is_compressed => old_size / 4,
+                    _ => 0,
+                };
+                
+                // Remove old entry stats
+                self.stats.update_on_remove(old, old_size, old_compression_saved, 0);
+                // Add new entry stats
+                self.stats.update_on_insert(&entry_arc, entry_size, compression_saved, dedup_saved);
+            }
         }
         
         // Update LRU tracker
@@ -318,6 +356,13 @@ impl OverrideStore {
     pub fn get(&self, path: &ShadowPath) -> Option<Arc<OverrideEntry>> {
         // Check hot cache first
         if let Some(entry) = self.hot_cache.get(path) {
+            // Cache hit!
+            self.stats.update_cache_access(true);
+            
+            // Update hot path tracking
+            let bytes = entry.override_metadata.size;
+            self.stats.update_hot_path_access(path, bytes);
+            
             // Update LRU tracker on access
             self.lru_tracker.record_access(path);
             
@@ -335,6 +380,13 @@ impl OverrideStore {
         if let Some(entry) = self.entries.get(path) {
             let entry_arc = entry.clone();
             
+            // Cache miss, but found in main store
+            self.stats.update_cache_access(false);
+            
+            // Update hot path tracking
+            let bytes = entry_arc.override_metadata.size;
+            self.stats.update_hot_path_access(path, bytes);
+            
             // Add to hot cache
             self.hot_cache.put(path.clone(), entry_arc.clone());
             
@@ -350,6 +402,8 @@ impl OverrideStore {
             
             Some(entry_arc)
         } else {
+            // Complete miss - not in cache or main store
+            self.stats.update_cache_access(false);
             None
         }
     }
@@ -389,6 +443,16 @@ impl OverrideStore {
     /// The removed entry if it existed
     pub fn remove(&self, path: &ShadowPath) -> Option<Arc<OverrideEntry>> {
         if let Some((_, entry)) = self.entries.remove(path) {
+            // Calculate removal stats
+            let entry_size = calculate_entry_size(&entry);
+            let compression_saved = match &entry.content {
+                OverrideContent::File { is_compressed, .. } if *is_compressed => entry_size / 4,
+                _ => 0,
+            };
+            
+            // Update stats for removal
+            self.stats.update_on_remove(&entry, entry_size, compression_saved, 0);
+            
             // Remove from hot cache
             self.hot_cache.remove(path);
             
@@ -431,13 +495,21 @@ impl OverrideStore {
         let victims = lru_paths;
         let mut freed_bytes = 0;
         
+        let mut evicted_count = 0;
         for path in victims {
             if let Some(entry) = self.remove(&path) {
-                freed_bytes += calculate_entry_size(&entry);
+                let entry_size = calculate_entry_size(&entry);
+                freed_bytes += entry_size;
+                evicted_count += 1;
                 if freed_bytes >= target_bytes {
                     break;
                 }
             }
+        }
+        
+        // Update eviction stats
+        if evicted_count > 0 {
+            self.stats.update_on_eviction(evicted_count, freed_bytes);
         }
         
         Ok(freed_bytes)
@@ -807,5 +879,64 @@ impl OverrideStore {
             dir_count, total_children,
             self.get_prefetch_strategy()
         )
+    }
+    
+    /// Gets comprehensive statistics report.
+    ///
+    /// # Returns
+    /// Detailed statistics report with performance metrics
+    pub fn get_stats_report(&self) -> StatsReport {
+        self.stats.generate_report()
+    }
+    
+    /// Gets current statistics snapshot.
+    ///
+    /// # Returns
+    /// Current statistics values
+    pub fn get_stats_snapshot(&self) -> StatsSnapshot {
+        self.stats.get_snapshot()
+    }
+    
+    /// Gets memory usage breakdown.
+    ///
+    /// # Returns
+    /// Detailed memory breakdown
+    pub fn get_memory_breakdown(&self) -> MemoryBreakdown {
+        self.stats.get_memory_breakdown()
+    }
+    
+    /// Gets hot paths (most accessed paths).
+    ///
+    /// # Arguments
+    /// * `limit` - Maximum number of paths to return
+    ///
+    /// # Returns
+    /// Vector of hot paths with their access statistics
+    pub fn get_hot_paths(&self, limit: usize) -> Vec<(ShadowPath, HotPathStats)> {
+        self.stats.get_hot_paths(limit)
+    }
+    
+    /// Registers a callback for statistics changes.
+    ///
+    /// # Arguments
+    /// * `callback` - Callback function to be called when stats change
+    pub fn register_stats_callback<F>(&self, callback: F) 
+    where 
+        F: Fn(&StatsSnapshot) + Send + Sync + 'static 
+    {
+        self.stats.register_callback(callback);
+    }
+    
+    /// Updates alert configuration for monitoring.
+    ///
+    /// # Arguments
+    /// * `config` - New alert configuration
+    pub fn update_alert_config(&self, config: AlertConfig) {
+        self.stats.update_alert_config(config);
+    }
+    
+    /// Resets all statistics.
+    pub fn reset_stats(&self) {
+        self.stats.reset();
     }
 }
