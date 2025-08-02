@@ -62,6 +62,21 @@ impl ShadowPath {
     pub fn as_path(&self) -> &Path {
         &self.inner
     }
+    
+    /// Returns the parent path, if any.
+    pub fn parent(&self) -> Option<ShadowPath> {
+        self.inner.parent().map(|p| ShadowPath::new(p.to_path_buf()))
+    }
+    
+    /// Returns the filename component, if any.
+    pub fn file_name(&self) -> Option<String> {
+        self.inner.file_name().and_then(|name| name.to_str()).map(String::from)
+    }
+    
+    /// Joins this path with another path component.
+    pub fn join<P: AsRef<Path>>(&self, path: P) -> ShadowPath {
+        ShadowPath::new(self.inner.join(path))
+    }
 }
 
 impl fmt::Display for ShadowPath {

@@ -4,13 +4,15 @@ mod entry;
 mod memory;
 mod lru;
 mod size;
+mod directory;
 
 pub use entry::{OverrideEntry, OverrideContent};
 pub use memory::{MemoryTracker, MemoryGuard};
 pub use lru::{LruTracker, AccessStats, EvictionPolicy};
 pub use size::{calculate_bytes_size, calculate_entry_size};
+pub use directory::{DirectoryCache, PathTraversal};
 
-use crate::types::{FileMetadata, ShadowPath};
+use crate::types::{FileMetadata, ShadowPath, DirectoryEntry};
 use crate::error::ShadowError;
 use bytes::Bytes;
 use dashmap::DashMap;
@@ -56,6 +58,9 @@ pub struct OverrideStore {
     /// LRU tracker for access patterns and eviction
     lru_tracker: Arc<LruTracker>,
     
+    /// Directory cache for parent-child relationships
+    directory_cache: Arc<DirectoryCache>,
+    
     /// Runtime configuration that can be updated
     config: RwLock<OverrideStoreConfig>,
 }
@@ -68,12 +73,14 @@ impl OverrideStore {
     pub fn new(config: OverrideStoreConfig) -> Self {
         let memory_tracker = Arc::new(MemoryTracker::new(config.max_memory));
         let lru_tracker = Arc::new(LruTracker::new());
+        let directory_cache = Arc::new(DirectoryCache::new());
         let entries = Arc::new(DashMap::new());
         
         Self {
             entries,
             memory_tracker,
             lru_tracker,
+            directory_cache,
             config: RwLock::new(config),
         }
     }
@@ -234,6 +241,16 @@ impl OverrideStore {
         // Update LRU tracker
         self.lru_tracker.record_access(&path);
         
+        // Update directory cache if this is a new entry
+        if old_entry.is_none() {
+            if let Some(parent) = path.parent() {
+                let filename = PathTraversal::get_filename(&path);
+                if !filename.is_empty() {
+                    self.directory_cache.add_child(&parent, &filename);
+                }
+            }
+        }
+        
         Ok(())
     }
     
@@ -301,6 +318,14 @@ impl OverrideStore {
         if let Some((_, entry)) = self.entries.remove(path) {
             // Remove from LRU tracker
             self.lru_tracker.remove_entry(path);
+            
+            // Remove from directory cache
+            if let Some(parent) = path.parent() {
+                let filename = PathTraversal::get_filename(path);
+                if !filename.is_empty() {
+                    self.directory_cache.remove_child(&parent, &filename);
+                }
+            }
             
             // Memory will be freed when the Arc is dropped
             Some(entry)
@@ -408,5 +433,194 @@ impl OverrideStore {
     /// Gets the number of entries in the store.
     pub fn entry_count(&self) -> usize {
         self.entries.len()
+    }
+    
+    // === Directory Operations ===
+    
+    /// Creates a directory hierarchy, ensuring all parent directories exist.
+    ///
+    /// # Arguments
+    /// * `path` - Path to create (all parent directories will be created if needed)
+    ///
+    /// # Returns
+    /// Ok(()) on success, or an error if memory limits would be exceeded
+    pub fn create_directory_hierarchy(&self, path: &ShadowPath) -> Result<(), ShadowError> {
+        let parent_chain = PathTraversal::get_parent_chain(path);
+        
+        // Create parents from root to immediate parent
+        for parent_path in parent_chain.iter().rev() {
+            if !self.exists(parent_path) {
+                self.insert_directory(parent_path.clone(), None)?;
+            }
+        }
+        
+        // Create the target directory if it doesn't exist
+        if !self.exists(path) {
+            self.insert_directory(path.clone(), None)?;
+        }
+        
+        Ok(())
+    }
+    
+    /// Lists the contents of a directory, merging override entries.
+    ///
+    /// # Arguments
+    /// * `path` - Directory path to list
+    ///
+    /// # Returns
+    /// Vector of directory entries, or an error if the path is not a directory
+    pub fn list_directory(&self, path: &ShadowPath) -> Result<Vec<DirectoryEntry>, ShadowError> {
+        // Check if this is a directory in our overrides
+        if let Some(entry) = self.get(path) {
+            match &entry.content {
+                OverrideContent::Directory { .. } => {
+                    // It's a directory override, get children from cache
+                    let children = self.directory_cache.get_children(path);
+                    let mut entries = Vec::new();
+                    
+                    for child_name in children {
+                        let child_path = path.join(&child_name);
+                        
+                        if let Some(child_entry) = self.get(&child_path) {
+                            // Skip deleted entries
+                            if matches!(child_entry.content, OverrideContent::Deleted) {
+                                continue;
+                            }
+                            
+                            let entry = DirectoryEntry {
+                                name: child_name,
+                                metadata: child_entry.override_metadata.clone(),
+                            };
+                            entries.push(entry);
+                        }
+                    }
+                    
+                    Ok(entries)
+                }
+                OverrideContent::Deleted => {
+                    Err(ShadowError::NotFound {
+                        path: path.clone(),
+                    })
+                }
+                OverrideContent::File { .. } => {
+                    Err(ShadowError::NotADirectory {
+                        path: path.clone(),
+                    })
+                }
+            }
+        } else {
+            // No override, would need to check underlying filesystem
+            // For now, return empty list for non-existent directories
+            Ok(Vec::new())
+        }
+    }
+    
+    /// Checks if a directory is empty (has no children).
+    ///
+    /// # Arguments
+    /// * `path` - Directory path to check
+    ///
+    /// # Returns
+    /// true if the directory exists and is empty, false otherwise
+    pub fn is_empty_directory(&self, path: &ShadowPath) -> bool {
+        if let Some(entry) = self.get(path) {
+            match &entry.content {
+                OverrideContent::Directory { .. } => {
+                    // Check if directory has any non-deleted children
+                    let children = self.directory_cache.get_children(path);
+                    for child_name in children {
+                        let child_path = path.join(&child_name);
+                        if let Some(child_entry) = self.get(&child_path) {
+                            if !matches!(child_entry.content, OverrideContent::Deleted) {
+                                return false;
+                            }
+                        }
+                    }
+                    true
+                }
+                _ => false, // Not a directory
+            }
+        } else {
+            false // Directory doesn't exist
+        }
+    }
+    
+    /// Recursively deletes a directory and all its contents.
+    ///
+    /// # Arguments
+    /// * `path` - Directory path to delete
+    ///
+    /// # Returns
+    /// Vector of paths that were deleted
+    pub fn delete_directory_recursive(&self, path: &ShadowPath) -> Result<Vec<ShadowPath>, ShadowError> {
+        let mut deleted_paths = Vec::new();
+        
+        // Find all affected children (direct and indirect)
+        let all_paths: Vec<ShadowPath> = self.entries.iter()
+            .map(|entry| entry.key().clone())
+            .collect();
+        
+        let affected_children = PathTraversal::find_affected_children(path, &all_paths);
+        
+        // Delete children first (depth-first)
+        for child_path in affected_children {
+            if self.remove(&child_path).is_some() {
+                deleted_paths.push(child_path);
+            }
+        }
+        
+        // Delete the directory itself by marking it as deleted
+        self.mark_deleted(path.clone())?;
+        deleted_paths.push(path.clone());
+        
+        Ok(deleted_paths)
+    }
+    
+    /// Cleans up empty parent directories after deletion.
+    ///
+    /// # Arguments
+    /// * `path` - Starting path to clean up parents from
+    pub fn cleanup_empty_parents(&self, path: &ShadowPath) {
+        let parent_chain = PathTraversal::get_parent_chain(path);
+        
+        for parent_path in parent_chain {
+            if self.is_empty_directory(&parent_path) {
+                // Only remove if it was an override (not from underlying filesystem)
+                if let Some(parent_entry) = self.get(&parent_path) {
+                    if matches!(parent_entry.content, OverrideContent::Directory { .. }) {
+                        self.remove(&parent_path);
+                    }
+                }
+            } else {
+                // Stop at first non-empty parent
+                break;
+            }
+        }
+    }
+    
+    /// Gets all paths under a given directory path.
+    ///
+    /// # Arguments
+    /// * `path` - Directory path to find children for
+    ///
+    /// # Returns
+    /// Vector of all child paths (direct and indirect)
+    pub fn get_children_recursive(&self, path: &ShadowPath) -> Vec<ShadowPath> {
+        let all_paths: Vec<ShadowPath> = self.entries.iter()
+            .map(|entry| entry.key().clone())
+            .collect();
+        
+        PathTraversal::find_affected_children(path, &all_paths)
+    }
+    
+    /// Gets statistics about the directory cache.
+    ///
+    /// # Returns
+    /// (directory_count, total_child_count)
+    pub fn directory_stats(&self) -> (usize, usize) {
+        (
+            self.directory_cache.directory_count(),
+            self.directory_cache.total_child_count()
+        )
     }
 }
