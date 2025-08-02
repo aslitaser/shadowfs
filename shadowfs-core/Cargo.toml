@@ -20,6 +20,8 @@ tokio = { workspace = true, features = ["sync", "fs", "io-util"] }
 dashmap = "6.1"
 indexmap = "2.6"
 sha2 = "0.10"
+blake3 = "1.5"
+lru = "0.12"
 bincode = "1.3"
 zstd = "0.13"
 crc32fast = "1.4"
