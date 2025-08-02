@@ -113,34 +113,78 @@ pub enum FileType {
 }
 
 /// Represents file permissions in a platform-agnostic way.
+/// Abstracts Unix permissions (rwx) and Windows ACLs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FilePermissions {
-    /// Unix-style permissions (rwxrwxrwx)
-    pub mode: u32,
     /// Whether the file is read-only
     pub readonly: bool,
+    /// Owner read permission
+    pub owner_read: bool,
+    /// Owner write permission
+    pub owner_write: bool,
+    /// Owner execute permission
+    pub owner_execute: bool,
+    /// Group read permission
+    pub group_read: bool,
+    /// Group write permission
+    pub group_write: bool,
+    /// Group execute permission
+    pub group_execute: bool,
+    /// Other read permission
+    pub other_read: bool,
+    /// Other write permission
+    pub other_write: bool,
+    /// Other execute permission
+    pub other_execute: bool,
 }
 
 impl FilePermissions {
-    /// Creates a new FilePermissions instance.
-    pub fn new(mode: u32, readonly: bool) -> Self {
-        Self { mode, readonly }
+    /// Creates a new FilePermissions instance from Unix mode bits.
+    pub fn from_unix_mode(mode: u32) -> Self {
+        Self {
+            readonly: (mode & 0o200) == 0, // No owner write permission
+            owner_read: (mode & 0o400) != 0,
+            owner_write: (mode & 0o200) != 0,
+            owner_execute: (mode & 0o100) != 0,
+            group_read: (mode & 0o040) != 0,
+            group_write: (mode & 0o020) != 0,
+            group_execute: (mode & 0o010) != 0,
+            other_read: (mode & 0o004) != 0,
+            other_write: (mode & 0o002) != 0,
+            other_execute: (mode & 0o001) != 0,
+        }
+    }
+
+    /// Converts the permissions to Unix mode bits.
+    pub fn to_unix_mode(&self) -> u32 {
+        let mut mode = 0;
+        
+        if self.owner_read { mode |= 0o400; }
+        if self.owner_write { mode |= 0o200; }
+        if self.owner_execute { mode |= 0o100; }
+        if self.group_read { mode |= 0o040; }
+        if self.group_write { mode |= 0o020; }
+        if self.group_execute { mode |= 0o010; }
+        if self.other_read { mode |= 0o004; }
+        if self.other_write { mode |= 0o002; }
+        if self.other_execute { mode |= 0o001; }
+        
+        mode
+    }
+
+    /// Returns true if the file is executable by anyone.
+    pub fn is_executable(&self) -> bool {
+        self.owner_execute || self.group_execute || self.other_execute
     }
 
     /// Returns default permissions for a file.
     pub fn default_file() -> Self {
-        Self {
-            mode: 0o644,
-            readonly: false,
-        }
+        Self::from_unix_mode(0o644)
     }
 
     /// Returns default permissions for a directory.
     pub fn default_directory() -> Self {
-        Self {
-            mode: 0o755,
-            readonly: false,
-        }
+        Self::from_unix_mode(0o755)
     }
 }
 
@@ -242,5 +286,47 @@ mod tests {
     fn test_display_forward_slashes() {
         let path = ShadowPath::from("foo/bar/baz");
         assert_eq!(path.to_string(), "foo/bar/baz");
+    }
+
+    #[test]
+    fn test_file_permissions_from_unix_mode() {
+        let perms = FilePermissions::from_unix_mode(0o755);
+        assert_eq!(perms.owner_read, true);
+        assert_eq!(perms.owner_write, true);
+        assert_eq!(perms.owner_execute, true);
+        assert_eq!(perms.group_read, true);
+        assert_eq!(perms.group_write, false);
+        assert_eq!(perms.group_execute, true);
+        assert_eq!(perms.other_read, true);
+        assert_eq!(perms.other_write, false);
+        assert_eq!(perms.other_execute, true);
+        assert_eq!(perms.readonly, false);
+    }
+
+    #[test]
+    fn test_file_permissions_to_unix_mode() {
+        let perms = FilePermissions::from_unix_mode(0o644);
+        assert_eq!(perms.to_unix_mode(), 0o644);
+        
+        let perms2 = FilePermissions::from_unix_mode(0o755);
+        assert_eq!(perms2.to_unix_mode(), 0o755);
+    }
+
+    #[test]
+    fn test_file_permissions_is_executable() {
+        let perms_exec = FilePermissions::from_unix_mode(0o755);
+        assert!(perms_exec.is_executable());
+        
+        let perms_no_exec = FilePermissions::from_unix_mode(0o644);
+        assert!(!perms_no_exec.is_executable());
+    }
+
+    #[test]
+    fn test_file_permissions_readonly() {
+        let perms_readonly = FilePermissions::from_unix_mode(0o444);
+        assert!(perms_readonly.readonly);
+        
+        let perms_writeable = FilePermissions::from_unix_mode(0o644);
+        assert!(!perms_writeable.readonly);
     }
 }
