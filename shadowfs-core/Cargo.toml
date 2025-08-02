@@ -1,0 +1,16 @@
+[package]
+name = "shadowfs-core"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "shadowfs_core"
+path = "src/lib.rs"
+
+[dependencies]
+async-trait = "0.1"
+bytes.workspace = true
+thiserror.workspace = true
