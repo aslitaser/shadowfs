@@ -6,7 +6,7 @@
 use async_trait::async_trait;
 use crate::types::{
     ShadowPath, FileHandle, FileMetadata, DirectoryEntry, 
-    OperationResult, OpenFlags, Bytes
+    OperationResult, OpenFlags, Bytes, MountOptions
 };
 
 /// Handle representing a mounted filesystem.
@@ -27,49 +27,6 @@ impl MountHandle {
     }
 }
 
-/// Options for mounting a filesystem.
-#[derive(Debug, Clone, Default)]
-pub struct MountOptions {
-    /// Whether the mount should be read-only
-    pub read_only: bool,
-    /// Maximum size in bytes for the override store (0 = unlimited)
-    pub max_override_size: usize,
-    /// Whether to allow mounting over existing mount points
-    pub allow_overlay: bool,
-    /// Custom mount-specific options as key-value pairs
-    pub custom_options: Vec<(String, String)>,
-}
-
-impl MountOptions {
-    /// Creates new mount options with default values.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Sets the mount as read-only.
-    pub fn read_only(mut self, read_only: bool) -> Self {
-        self.read_only = read_only;
-        self
-    }
-
-    /// Sets the maximum override store size.
-    pub fn max_override_size(mut self, size: usize) -> Self {
-        self.max_override_size = size;
-        self
-    }
-
-    /// Sets whether to allow overlay mounts.
-    pub fn allow_overlay(mut self, allow: bool) -> Self {
-        self.allow_overlay = allow;
-        self
-    }
-
-    /// Adds a custom option.
-    pub fn add_option(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
-        self.custom_options.push((key.into(), value.into()));
-        self
-    }
-}
 
 /// The main filesystem trait that all platform implementations must provide.
 ///
@@ -236,30 +193,4 @@ mod tests {
         assert_eq!(handle.target, target);
     }
 
-    #[test]
-    fn test_mount_options_builder() {
-        let options = MountOptions::new()
-            .read_only(true)
-            .max_override_size(1024 * 1024)
-            .allow_overlay(true)
-            .add_option("key1", "value1")
-            .add_option("key2", "value2");
-
-        assert!(options.read_only);
-        assert_eq!(options.max_override_size, 1024 * 1024);
-        assert!(options.allow_overlay);
-        assert_eq!(options.custom_options.len(), 2);
-        assert_eq!(options.custom_options[0], ("key1".to_string(), "value1".to_string()));
-        assert_eq!(options.custom_options[1], ("key2".to_string(), "value2".to_string()));
-    }
-
-    #[test]
-    fn test_mount_options_default() {
-        let options = MountOptions::default();
-
-        assert!(!options.read_only);
-        assert_eq!(options.max_override_size, 0);
-        assert!(!options.allow_overlay);
-        assert!(options.custom_options.is_empty());
-    }
 }
