@@ -18,6 +18,23 @@ pub enum OperationType {
     Rename,
 }
 
+impl OperationType {
+    /// Returns a human-readable name for the operation type.
+    pub fn name(&self) -> &'static str {
+        match self {
+            OperationType::Open => "open",
+            OperationType::Read => "read",
+            OperationType::Write => "write",
+            OperationType::Close => "close",
+            OperationType::Stat => "stat",
+            OperationType::ReadDir => "readdir",
+            OperationType::Create => "create",
+            OperationType::Delete => "delete",
+            OperationType::Rename => "rename",
+        }
+    }
+}
+
 /// Performance statistics for filesystem operations.
 pub struct FileSystemStats {
     /// Number of active mounts
