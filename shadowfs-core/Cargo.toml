@@ -16,3 +16,4 @@ bytes.workspace = true
 thiserror.workspace = true
 uuid = { version = "1.10", features = ["v4", "serde"] }
 tokio = { workspace = true, features = ["sync"] }
+dashmap = "6.1"
