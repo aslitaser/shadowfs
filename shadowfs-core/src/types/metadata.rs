@@ -1,4 +1,6 @@
 use std::time::SystemTime;
+use std::collections::HashMap;
+use bytes::Bytes;
 
 /// Represents the type of a file system entry.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -111,6 +113,35 @@ pub enum PlatformMetadata {
         /// Number of hard links
         nlink: u64,
     },
+}
+
+/// Windows-specific metadata with extended attributes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WindowsMetadata {
+    /// File attributes (hidden, system, archive, etc.)
+    pub attributes: u32,
+    /// Reparse point tag (for symlinks and other special files)
+    pub reparse_tag: Option<u32>,
+}
+
+/// macOS-specific metadata with extended attributes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MacOSMetadata {
+    /// BSD flags
+    pub flags: u32,
+    /// Extended attributes as key-value pairs
+    pub extended_attributes: HashMap<String, Bytes>,
+}
+
+/// Linux-specific metadata with extended attributes.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LinuxMetadata {
+    /// Inode number
+    pub inode: u64,
+    /// Device ID
+    pub device: u64,
+    /// Extended attributes as key-value pairs
+    pub extended_attributes: HashMap<String, Bytes>,
 }
 
 /// Complete metadata for a file system entry.
