@@ -66,7 +66,6 @@ pub enum ShadowError {
     /// I/O error from the underlying system.
     #[error("I/O error")]
     IoError {
-        #[from]
         #[source]
         source: std::io::Error,
     },
@@ -97,6 +96,88 @@ pub enum ShadowError {
     Unsupported { 
         feature: String 
     },
+}
+
+impl ShadowError {
+    /// Creates a ShadowError from an io::Error with context about the path.
+    /// This provides more specific error mapping than the generic From trait.
+    pub fn from_io_error(error: std::io::Error, path: Option<&ShadowPath>) -> Self {
+        use std::io::ErrorKind;
+        
+        match error.kind() {
+            ErrorKind::NotFound => {
+                if let Some(p) = path {
+                    ShadowError::NotFound { path: p.clone() }
+                } else {
+                    ShadowError::IoError { source: error }
+                }
+            }
+            ErrorKind::PermissionDenied => {
+                if let Some(p) = path {
+                    ShadowError::PermissionDenied { 
+                        path: p.clone(), 
+                        operation: "access".to_string() 
+                    }
+                } else {
+                    ShadowError::IoError { source: error }
+                }
+            }
+            ErrorKind::AlreadyExists => {
+                if let Some(p) = path {
+                    ShadowError::AlreadyExists { path: p.clone() }
+                } else {
+                    ShadowError::IoError { source: error }
+                }
+            }
+            ErrorKind::InvalidInput | ErrorKind::InvalidData => {
+                if let Some(p) = path {
+                    ShadowError::InvalidPath { 
+                        path: p.to_string(), 
+                        reason: error.to_string() 
+                    }
+                } else {
+                    ShadowError::InvalidArgument(error.to_string())
+                }
+            }
+            ErrorKind::WouldBlock => ShadowError::WouldBlock,
+            ErrorKind::BrokenPipe => ShadowError::BrokenPipe,
+            ErrorKind::ConnectionAborted => ShadowError::ConnectionAborted,
+            ErrorKind::ConnectionReset => ShadowError::ConnectionReset,
+            ErrorKind::Interrupted => ShadowError::Interrupted,
+            ErrorKind::OutOfMemory => {
+                ShadowError::OverrideStoreFull { 
+                    current_size: 0, 
+                    max_size: 0 
+                }
+            }
+            _ => ShadowError::IoError { source: error }
+        }
+    }
+
+    /// Creates a ShadowError from an io::Error for a specific operation.
+    pub fn from_io_error_with_operation(
+        error: std::io::Error, 
+        path: &ShadowPath, 
+        operation: &str
+    ) -> Self {
+        use std::io::ErrorKind;
+        
+        match error.kind() {
+            ErrorKind::PermissionDenied => {
+                ShadowError::PermissionDenied { 
+                    path: path.clone(), 
+                    operation: operation.to_string() 
+                }
+            }
+            _ => Self::from_io_error(error, Some(path))
+        }
+    }
+}
+
+impl From<std::io::Error> for ShadowError {
+    fn from(error: std::io::Error) -> Self {
+        Self::from_io_error(error, None)
+    }
 }
 
 /// Result type alias for ShadowFS operations.
