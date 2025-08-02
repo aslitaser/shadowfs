@@ -4,7 +4,7 @@ use crate::types::{FileMetadata, ShadowPath};
 use bytes::Bytes;
 use dashmap::DashMap;
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
@@ -66,7 +66,7 @@ impl OverrideStore {
     ///
     /// # Arguments
     /// * `max_memory` - Maximum memory usage in bytes
-    pub fn new(max_memory: usize) -> Self {
+    pub fn new(_max_memory: usize) -> Self {
         // TODO: Implement
         unimplemented!("OverrideStore::new")
     }
@@ -82,10 +82,10 @@ impl OverrideStore {
     /// Ok(()) on success, or an error if memory limits would be exceeded
     pub fn insert(
         &self,
-        path: ShadowPath,
-        content: OverrideContent,
-        metadata: FileMetadata,
-    ) -> Result<(), crate::error::Error> {
+        _path: ShadowPath,
+        _content: OverrideContent,
+        _metadata: FileMetadata,
+    ) -> Result<(), crate::error::ShadowError> {
         // TODO: Implement
         unimplemented!("OverrideStore::insert")
     }
@@ -97,7 +97,7 @@ impl OverrideStore {
     ///
     /// # Returns
     /// Arc to the override entry if found
-    pub fn get(&self, path: &ShadowPath) -> Option<Arc<OverrideEntry>> {
+    pub fn get(&self, _path: &ShadowPath) -> Option<Arc<OverrideEntry>> {
         // TODO: Implement
         unimplemented!("OverrideStore::get")
     }
@@ -109,7 +109,7 @@ impl OverrideStore {
     ///
     /// # Returns
     /// The removed entry if it existed
-    pub fn remove(&self, path: &ShadowPath) -> Option<OverrideEntry> {
+    pub fn remove(&self, _path: &ShadowPath) -> Option<OverrideEntry> {
         // TODO: Implement
         unimplemented!("OverrideStore::remove")
     }
