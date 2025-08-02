@@ -175,6 +175,152 @@ impl From<std::io::Error> for ShadowError {
 /// Result type alias for ShadowFS operations.
 pub type Result<T> = std::result::Result<T, ShadowError>;
 
+/// Helper function to create a NotFound error.
+/// 
+/// # Example
+/// ```ignore
+/// use shadowfs_core::error::not_found;
+/// use shadowfs_core::types::ShadowPath;
+/// 
+/// let path = ShadowPath::from("/missing/file.txt");
+/// let err = not_found(path.clone());
+/// ```
+pub fn not_found(path: ShadowPath) -> ShadowError {
+    ShadowError::NotFound { path }
+}
+
+/// Helper function to create a PermissionDenied error.
+/// 
+/// # Example
+/// ```ignore
+/// use shadowfs_core::error::permission_denied;
+/// use shadowfs_core::types::ShadowPath;
+/// 
+/// let path = ShadowPath::from("/protected/file.txt");
+/// let err = permission_denied(path.clone(), "write");
+/// ```
+pub fn permission_denied(path: ShadowPath, operation: impl Into<String>) -> ShadowError {
+    ShadowError::PermissionDenied { 
+        path, 
+        operation: operation.into() 
+    }
+}
+
+/// Helper function to create an AlreadyExists error.
+/// 
+/// # Example
+/// ```ignore
+/// use shadowfs_core::error::already_exists;
+/// use shadowfs_core::types::ShadowPath;
+/// 
+/// let path = ShadowPath::from("/existing/file.txt");
+/// let err = already_exists(path.clone());
+/// ```
+pub fn already_exists(path: ShadowPath) -> ShadowError {
+    ShadowError::AlreadyExists { path }
+}
+
+/// Helper function to create a NotADirectory error.
+/// 
+/// # Example
+/// ```ignore
+/// use shadowfs_core::error::not_a_directory;
+/// use shadowfs_core::types::ShadowPath;
+/// 
+/// let path = ShadowPath::from("/file.txt");
+/// let err = not_a_directory(path.clone());
+/// ```
+pub fn not_a_directory(path: ShadowPath) -> ShadowError {
+    ShadowError::NotADirectory { path }
+}
+
+/// Helper function to create an IsADirectory error.
+/// 
+/// # Example
+/// ```ignore
+/// use shadowfs_core::error::is_a_directory;
+/// use shadowfs_core::types::ShadowPath;
+/// 
+/// let path = ShadowPath::from("/directory");
+/// let err = is_a_directory(path.clone());
+/// ```
+pub fn is_a_directory(path: ShadowPath) -> ShadowError {
+    ShadowError::IsADirectory { path }
+}
+
+/// Helper function to create an InvalidPath error.
+/// 
+/// # Example
+/// ```ignore
+/// use shadowfs_core::error::invalid_path;
+/// 
+/// let err = invalid_path("//invalid//path", "contains double slashes");
+/// ```
+pub fn invalid_path(path: impl Into<String>, reason: impl Into<String>) -> ShadowError {
+    ShadowError::InvalidPath { 
+        path: path.into(), 
+        reason: reason.into() 
+    }
+}
+
+/// Helper function to create a NotMounted error.
+/// 
+/// # Example
+/// ```ignore
+/// use shadowfs_core::error::not_mounted;
+/// use shadowfs_core::types::ShadowPath;
+/// 
+/// let mount_point = ShadowPath::from("/mnt/shadow");
+/// let err = not_mounted(mount_point.clone());
+/// ```
+pub fn not_mounted(mount_point: ShadowPath) -> ShadowError {
+    ShadowError::NotMounted { mount_point }
+}
+
+/// Helper function to create an Unsupported error.
+/// 
+/// # Example
+/// ```ignore
+/// use shadowfs_core::error::unsupported;
+/// 
+/// let err = unsupported("symbolic links");
+/// ```
+pub fn unsupported(feature: impl Into<String>) -> ShadowError {
+    ShadowError::Unsupported { feature: feature.into() }
+}
+
+/// Helper function to create an OverrideStoreFull error.
+/// 
+/// # Example
+/// ```ignore
+/// use shadowfs_core::error::override_store_full;
+/// 
+/// let err = override_store_full(1048576, 1048576);
+/// ```
+pub fn override_store_full(current_size: usize, max_size: usize) -> ShadowError {
+    ShadowError::OverrideStoreFull { current_size, max_size }
+}
+
+/// Helper function to create a PlatformError.
+/// 
+/// # Example
+/// ```ignore
+/// use shadowfs_core::error::{platform_error, Platform};
+/// 
+/// let err = platform_error(Platform::Windows, "Access denied", Some(5));
+/// ```
+pub fn platform_error(
+    platform: Platform, 
+    message: impl Into<String>, 
+    code: Option<i32>
+) -> ShadowError {
+    ShadowError::PlatformError { 
+        platform, 
+        message: message.into(), 
+        code 
+    }
+}
+
 /// Trait for adding context to errors.
 /// 
 /// This trait provides methods to add additional context to errors,
@@ -429,6 +575,100 @@ mod tests {
         assert_eq!(Platform::Windows.to_string(), "Windows");
         assert_eq!(Platform::MacOS.to_string(), "macOS");
         assert_eq!(Platform::Linux.to_string(), "Linux");
+    }
+
+    #[test]
+    fn test_error_helper_functions() {
+        // Test not_found
+        let path = ShadowPath::from("/missing/file.txt");
+        let err = not_found(path.clone());
+        assert!(matches!(&err, ShadowError::NotFound { path: p } if p == &path));
+        assert_eq!(err.to_string(), "Path not found: /missing/file.txt");
+
+        // Test permission_denied
+        let path = ShadowPath::from("/protected/file.txt");
+        let err = permission_denied(path.clone(), "write");
+        assert!(matches!(
+            &err, 
+            ShadowError::PermissionDenied { path: p, operation } 
+            if p == &path && operation == "write"
+        ));
+        assert_eq!(err.to_string(), "Permission denied for operation 'write' on path: /protected/file.txt");
+
+        // Test already_exists
+        let path = ShadowPath::from("/existing/file.txt");
+        let err = already_exists(path.clone());
+        assert!(matches!(&err, ShadowError::AlreadyExists { path: p } if p == &path));
+        assert_eq!(err.to_string(), "Path already exists: /existing/file.txt");
+
+        // Test not_a_directory
+        let path = ShadowPath::from("/file.txt");
+        let err = not_a_directory(path.clone());
+        assert!(matches!(&err, ShadowError::NotADirectory { path: p } if p == &path));
+        assert_eq!(err.to_string(), "Not a directory: /file.txt");
+
+        // Test is_a_directory
+        let path = ShadowPath::from("/directory");
+        let err = is_a_directory(path.clone());
+        assert!(matches!(&err, ShadowError::IsADirectory { path: p } if p == &path));
+        assert_eq!(err.to_string(), "Is a directory: /directory");
+
+        // Test invalid_path
+        let err = invalid_path("//invalid//path", "contains double slashes");
+        assert!(matches!(
+            &err, 
+            ShadowError::InvalidPath { path, reason } 
+            if path == "//invalid//path" && reason == "contains double slashes"
+        ));
+        assert_eq!(err.to_string(), "Invalid path '//invalid//path': contains double slashes");
+
+        // Test not_mounted
+        let mount_point = ShadowPath::from("/mnt/shadow");
+        let err = not_mounted(mount_point.clone());
+        assert!(matches!(&err, ShadowError::NotMounted { mount_point: p } if p == &mount_point));
+        assert_eq!(err.to_string(), "Mount point not mounted: /mnt/shadow");
+
+        // Test unsupported
+        let err = unsupported("symbolic links");
+        assert!(matches!(&err, ShadowError::Unsupported { feature } if feature == "symbolic links"));
+        assert_eq!(err.to_string(), "Unsupported feature: symbolic links");
+
+        // Test override_store_full
+        let err = override_store_full(1048576, 1048576);
+        assert!(matches!(
+            &err, 
+            ShadowError::OverrideStoreFull { current_size, max_size } 
+            if *current_size == 1048576 && *max_size == 1048576
+        ));
+        assert_eq!(err.to_string(), "Override store is full: current size 1048576 bytes, maximum 1048576 bytes");
+
+        // Test platform_error
+        let err = platform_error(Platform::Windows, "Access denied", Some(5));
+        assert!(matches!(
+            &err, 
+            ShadowError::PlatformError { platform, message, code } 
+            if *platform == Platform::Windows && message == "Access denied" && *code == Some(5)
+        ));
+        assert_eq!(err.to_string(), "Platform error on Windows: Access denied (code: Some(5))");
+    }
+
+    #[test]
+    fn test_helper_functions_with_string_types() {
+        // Test that helper functions work with &str and String
+        let err = not_found(ShadowPath::from("/test/path"));
+        assert!(matches!(err, ShadowError::NotFound { .. }));
+
+        let err = permission_denied(ShadowPath::from("/test/path"), String::from("delete"));
+        assert!(matches!(err, ShadowError::PermissionDenied { .. }));
+
+        let err = invalid_path(String::from("bad path"), "invalid characters");
+        assert!(matches!(err, ShadowError::InvalidPath { .. }));
+
+        let err = unsupported(String::from("feature"));
+        assert!(matches!(err, ShadowError::Unsupported { .. }));
+
+        let err = platform_error(Platform::Linux, String::from("error"), None);
+        assert!(matches!(err, ShadowError::PlatformError { .. }));
     }
 
     #[test]
