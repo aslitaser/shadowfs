@@ -6,26 +6,9 @@
 use async_trait::async_trait;
 use crate::types::{
     ShadowPath, FileHandle, FileMetadata, DirectoryEntry, 
-    OperationResult, OpenFlags, Bytes, MountOptions
+    OperationResult, OpenFlags, Bytes, MountOptions, MountHandle
 };
 
-/// Handle representing a mounted filesystem.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct MountHandle {
-    /// Unique identifier for this mount
-    pub id: u64,
-    /// Source path that was mounted
-    pub source: ShadowPath,
-    /// Target mount point
-    pub target: ShadowPath,
-}
-
-impl MountHandle {
-    /// Creates a new mount handle with the given ID and paths.
-    pub fn new(id: u64, source: ShadowPath, target: ShadowPath) -> Self {
-        Self { id, source, target }
-    }
-}
 
 
 /// The main filesystem trait that all platform implementations must provide.
@@ -180,17 +163,4 @@ pub trait OverrideProvider: Send + Sync {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    #[test]
-    fn test_mount_handle() {
-        let source = ShadowPath::from("/source");
-        let target = ShadowPath::from("/target");
-        let handle = MountHandle::new(42, source.clone(), target.clone());
-
-        assert_eq!(handle.id, 42);
-        assert_eq!(handle.source, source);
-        assert_eq!(handle.target, target);
-    }
-
 }
