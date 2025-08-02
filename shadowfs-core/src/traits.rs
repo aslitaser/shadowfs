@@ -9,6 +9,25 @@ use crate::types::{
     OperationResult, OpenFlags, Bytes, MountOptions, MountHandle
 };
 
+// Re-export Platform from types::mount module
+pub use crate::types::mount::Platform;
+
+// Extension trait to add name() method to Platform
+pub trait PlatformExt {
+    /// Returns the name of the platform as a string slice.
+    fn name(&self) -> &'static str;
+}
+
+impl PlatformExt for Platform {
+    fn name(&self) -> &'static str {
+        match self {
+            Platform::Windows => "Windows",
+            Platform::MacOS => "macOS", 
+            Platform::Linux => "Linux",
+        }
+    }
+}
+
 
 
 /// The main filesystem trait that all platform implementations must provide.
@@ -106,6 +125,25 @@ pub trait FileSystem: Send + Sync {
     async fn read_directory(&self, path: &ShadowPath) -> OperationResult<Vec<DirectoryEntry>>;
 }
 
+/// Trait for detecting platform capabilities and creating platform-specific implementations.
+pub trait PlatformDetector: Send + Sync {
+    /// Detects the current platform's capabilities.
+    fn detect() -> PlatformCapabilities;
+    
+    /// Checks if all platform requirements are met.
+    /// 
+    /// # Returns
+    /// - `Ok(())` if all requirements are satisfied
+    /// - `Err(Vec<String>)` with a list of missing requirements
+    fn check_requirements() -> Result<(), Vec<String>>;
+    
+    /// Creates a platform-specific filesystem implementation.
+    /// 
+    /// # Returns
+    /// A boxed FileSystem implementation appropriate for the current platform.
+    fn get_mount_helper() -> Box<dyn FileSystem>;
+}
+
 /// Trait for managing file content overrides in memory.
 ///
 /// This trait provides an interface for storing and retrieving file content
@@ -161,6 +199,206 @@ pub trait OverrideProvider: Send + Sync {
     fn override_count(&self) -> usize;
 }
 
+/// Platform-specific capabilities and requirements.
+#[derive(Debug, Clone)]
+pub struct PlatformCapabilities {
+    /// The platform this capability set describes
+    pub platform: Platform,
+    
+    /// Whether Windows Projected File System (ProjFS) is available
+    pub has_projfs: bool,
+    
+    /// Whether macOS File System Kit (FSKit) is available
+    pub has_fskit: bool,
+    
+    /// Whether FUSE (Filesystem in Userspace) is available
+    pub has_fuse: bool,
+    
+    /// FUSE version if available (major, minor)
+    pub fuse_version: Option<(u8, u8)>,
+    
+    /// Whether administrative privileges are required
+    pub requires_admin: bool,
+    
+    /// Maximum path length supported by the platform
+    pub max_path_length: usize,
+}
+
+impl PlatformCapabilities {
+    /// Creates platform capabilities for the current platform.
+    pub fn current() -> Self {
+        let platform = Platform::current();
+        
+        match platform {
+            Platform::Windows => Self {
+                platform,
+                has_projfs: true,  // Windows 10 1809+ has ProjFS
+                has_fskit: false,
+                has_fuse: false,
+                fuse_version: None,
+                requires_admin: false,  // ProjFS doesn't require admin
+                max_path_length: 260,   // MAX_PATH on Windows
+            },
+            Platform::MacOS => Self {
+                platform,
+                has_projfs: false,
+                has_fskit: true,   // macOS 15.0+ has FSKit
+                has_fuse: true,    // macFUSE can be installed
+                fuse_version: None, // Would need to detect at runtime
+                requires_admin: true,  // FSKit requires admin
+                max_path_length: 1024, // PATH_MAX on macOS
+            },
+            Platform::Linux => Self {
+                platform,
+                has_projfs: false,
+                has_fskit: false,
+                has_fuse: true,    // FUSE is standard on Linux
+                fuse_version: Some((3, 0)), // FUSE 3 is common
+                requires_admin: false,  // FUSE can run as user
+                max_path_length: 4096,  // PATH_MAX on Linux
+            },
+        }
+    }
+    
+    /// Creates platform capabilities with specific settings.
+    pub fn new(platform: Platform) -> Self {
+        Self {
+            platform,
+            has_projfs: false,
+            has_fskit: false,
+            has_fuse: false,
+            fuse_version: None,
+            requires_admin: false,
+            max_path_length: 260,
+        }
+    }
+    
+    /// Checks if the platform has any supported filesystem provider.
+    pub fn has_any_provider(&self) -> bool {
+        self.has_projfs || self.has_fskit || self.has_fuse
+    }
+    
+    /// Gets the name of the recommended filesystem provider for this platform.
+    pub fn recommended_provider(&self) -> Option<&'static str> {
+        match self.platform {
+            Platform::Windows if self.has_projfs => Some("ProjFS"),
+            Platform::MacOS if self.has_fskit => Some("FSKit"),
+            Platform::MacOS if self.has_fuse => Some("macFUSE"),
+            Platform::Linux if self.has_fuse => Some("FUSE"),
+            _ => None,
+        }
+    }
+    
+    /// Checks if a given path length is valid for this platform.
+    pub fn is_valid_path_length(&self, length: usize) -> bool {
+        length <= self.max_path_length
+    }
+}
+
+impl Default for PlatformCapabilities {
+    fn default() -> Self {
+        Self::current()
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::*;
+    
+    #[test]
+    fn test_platform_capabilities_current() {
+        let caps = PlatformCapabilities::current();
+        assert_eq!(caps.platform, Platform::current());
+        
+        // Verify platform-specific defaults
+        match caps.platform {
+            Platform::Windows => {
+                assert!(caps.has_projfs);
+                assert!(!caps.has_fskit);
+                assert!(!caps.has_fuse);
+                assert_eq!(caps.max_path_length, 260);
+            }
+            Platform::MacOS => {
+                assert!(!caps.has_projfs);
+                assert!(caps.has_fskit);
+                assert!(caps.has_fuse);
+                assert_eq!(caps.max_path_length, 1024);
+            }
+            Platform::Linux => {
+                assert!(!caps.has_projfs);
+                assert!(!caps.has_fskit);
+                assert!(caps.has_fuse);
+                assert_eq!(caps.max_path_length, 4096);
+            }
+        }
+    }
+    
+    #[test]
+    fn test_platform_capabilities_new() {
+        let caps = PlatformCapabilities::new(Platform::Windows);
+        assert_eq!(caps.platform, Platform::Windows);
+        assert!(!caps.has_projfs);
+        assert!(!caps.has_fskit);
+        assert!(!caps.has_fuse);
+        assert!(caps.fuse_version.is_none());
+        assert!(!caps.requires_admin);
+        assert_eq!(caps.max_path_length, 260);
+    }
+    
+    #[test]
+    fn test_has_any_provider() {
+        let mut caps = PlatformCapabilities::new(Platform::Linux);
+        assert!(!caps.has_any_provider());
+        
+        caps.has_fuse = true;
+        assert!(caps.has_any_provider());
+        
+        caps.has_projfs = true;
+        assert!(caps.has_any_provider());
+    }
+    
+    #[test]
+    fn test_recommended_provider() {
+        // Windows with ProjFS
+        let mut caps = PlatformCapabilities::new(Platform::Windows);
+        caps.has_projfs = true;
+        assert_eq!(caps.recommended_provider(), Some("ProjFS"));
+        
+        // macOS with FSKit
+        let mut caps = PlatformCapabilities::new(Platform::MacOS);
+        caps.has_fskit = true;
+        assert_eq!(caps.recommended_provider(), Some("FSKit"));
+        
+        // macOS with only FUSE
+        let mut caps = PlatformCapabilities::new(Platform::MacOS);
+        caps.has_fuse = true;
+        assert_eq!(caps.recommended_provider(), Some("macFUSE"));
+        
+        // Linux with FUSE
+        let mut caps = PlatformCapabilities::new(Platform::Linux);
+        caps.has_fuse = true;
+        assert_eq!(caps.recommended_provider(), Some("FUSE"));
+        
+        // No provider
+        let caps = PlatformCapabilities::new(Platform::Windows);
+        assert_eq!(caps.recommended_provider(), None);
+    }
+    
+    #[test]
+    fn test_is_valid_path_length() {
+        let caps = PlatformCapabilities {
+            platform: Platform::Windows,
+            has_projfs: true,
+            has_fskit: false,
+            has_fuse: false,
+            fuse_version: None,
+            requires_admin: false,
+            max_path_length: 260,
+        };
+        
+        assert!(caps.is_valid_path_length(100));
+        assert!(caps.is_valid_path_length(260));
+        assert!(!caps.is_valid_path_length(261));
+        assert!(!caps.is_valid_path_length(1000));
+    }
 }
