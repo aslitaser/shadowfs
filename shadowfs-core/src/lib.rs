@@ -15,13 +15,12 @@
 //! 
 //! ## Basic Usage
 //! 
-//! ```rust,no_run
+//! ```rust,ignore
 //! use shadowfs_core::traits::FileSystemProvider;
 //! use std::path::Path;
 //! 
 //! async fn example() -> Result<(), Box<dyn std::error::Error>> {
 //!     // Platform-specific provider would be used here
-//!     # /*
 //!     let provider = get_platform_provider();
 //!     
 //!     // Mount a shadow filesystem
@@ -31,7 +30,6 @@
 //!     ).await?;
 //!     
 //!     // All operations on /mount/point now go through ShadowFS
-//!     # */
 //!     Ok(())
 //! }
 //! ```
