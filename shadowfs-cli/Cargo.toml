@@ -1,0 +1,28 @@
+[package]
+name = "shadowfs-cli"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "shadowfs"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+tokio.workspace = true
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing.workspace = true
+anyhow.workspace = true
+shadowfs-core = { path = "../shadowfs-core" }
+
+[target.'cfg(windows)'.dependencies]
+shadowfs-windows = { path = "../shadowfs-windows" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+shadowfs-macos = { path = "../shadowfs-macos" }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+shadowfs-linux = { path = "../shadowfs-linux" }
