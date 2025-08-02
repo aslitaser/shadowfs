@@ -3,6 +3,8 @@
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::collections::HashMap;
 use std::sync::RwLock;
+use std::time::Duration;
+use crate::types::ShadowPath;
 
 /// Types of operations that can be tracked for statistics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -32,6 +34,75 @@ impl OperationType {
             OperationType::Delete => "delete",
             OperationType::Rename => "rename",
         }
+    }
+}
+
+/// Metrics for an individual filesystem operation.
+#[derive(Debug, Clone)]
+pub struct OperationMetrics {
+    /// Type of operation performed
+    pub operation: OperationType,
+    
+    /// Path the operation was performed on
+    pub path: ShadowPath,
+    
+    /// Duration of the operation
+    pub duration: Duration,
+    
+    /// Number of bytes transferred (for read/write operations)
+    pub bytes_transferred: Option<usize>,
+    
+    /// Whether the operation hit the cache
+    pub cache_hit: bool,
+    
+    /// Error message if the operation failed
+    pub error: Option<String>,
+}
+
+impl OperationMetrics {
+    /// Creates new operation metrics for a successful operation.
+    pub fn success(
+        operation: OperationType,
+        path: ShadowPath,
+        duration: Duration,
+        bytes_transferred: Option<usize>,
+        cache_hit: bool,
+    ) -> Self {
+        Self {
+            operation,
+            path,
+            duration,
+            bytes_transferred,
+            cache_hit,
+            error: None,
+        }
+    }
+    
+    /// Creates new operation metrics for a failed operation.
+    pub fn failure(
+        operation: OperationType,
+        path: ShadowPath,
+        duration: Duration,
+        error: String,
+    ) -> Self {
+        Self {
+            operation,
+            path,
+            duration,
+            bytes_transferred: None,
+            cache_hit: false,
+            error: Some(error),
+        }
+    }
+    
+    /// Returns true if the operation was successful.
+    pub fn is_success(&self) -> bool {
+        self.error.is_none()
+    }
+    
+    /// Returns true if the operation failed.
+    pub fn is_failure(&self) -> bool {
+        self.error.is_some()
     }
 }
 
@@ -372,5 +443,44 @@ mod tests {
         assert_eq!(OperationType::Create.name(), "create");
         assert_eq!(OperationType::Delete.name(), "delete");
         assert_eq!(OperationType::Rename.name(), "rename");
+    }
+    
+    #[test]
+    fn test_operation_metrics_success() {
+        let metrics = OperationMetrics::success(
+            OperationType::Read,
+            ShadowPath::from("/test/file.txt"),
+            Duration::from_millis(10),
+            Some(1024),
+            true,
+        );
+        
+        assert!(metrics.is_success());
+        assert!(!metrics.is_failure());
+        assert_eq!(metrics.operation, OperationType::Read);
+        assert_eq!(metrics.path, ShadowPath::from("/test/file.txt"));
+        assert_eq!(metrics.duration, Duration::from_millis(10));
+        assert_eq!(metrics.bytes_transferred, Some(1024));
+        assert!(metrics.cache_hit);
+        assert!(metrics.error.is_none());
+    }
+    
+    #[test]
+    fn test_operation_metrics_failure() {
+        let metrics = OperationMetrics::failure(
+            OperationType::Open,
+            ShadowPath::from("/test/missing.txt"),
+            Duration::from_millis(5),
+            "File not found".to_string(),
+        );
+        
+        assert!(!metrics.is_success());
+        assert!(metrics.is_failure());
+        assert_eq!(metrics.operation, OperationType::Open);
+        assert_eq!(metrics.path, ShadowPath::from("/test/missing.txt"));
+        assert_eq!(metrics.duration, Duration::from_millis(5));
+        assert!(metrics.bytes_transferred.is_none());
+        assert!(!metrics.cache_hit);
+        assert_eq!(metrics.error, Some("File not found".to_string()));
     }
 }
