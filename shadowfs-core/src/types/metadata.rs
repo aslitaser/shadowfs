@@ -115,6 +115,39 @@ pub enum PlatformMetadata {
     },
 }
 
+impl Default for PlatformMetadata {
+    fn default() -> Self {
+        #[cfg(target_os = "windows")]
+        {
+            Self::Windows {
+                attributes: 0,
+                reparse_tag: None,
+            }
+        }
+        #[cfg(target_os = "macos")]
+        {
+            Self::MacOS {
+                flags: 0,
+                xattr_count: 0,
+            }
+        }
+        #[cfg(target_os = "linux")]
+        {
+            Self::Linux {
+                inode: 0,
+                nlink: 1,
+            }
+        }
+        #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+        {
+            Self::Linux {
+                inode: 0,
+                nlink: 1,
+            }
+        }
+    }
+}
+
 /// Windows-specific metadata with extended attributes.
 #[derive(Debug, Clone, PartialEq)]
 pub struct WindowsMetadata {

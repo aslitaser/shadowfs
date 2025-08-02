@@ -180,7 +180,7 @@ impl LruTracker {
     pub fn select_victims(
         &self,
         policy: EvictionPolicy,
-        entries: &DashMap<ShadowPath, OverrideEntry>,
+        entries: &DashMap<ShadowPath, std::sync::Arc<OverrideEntry>>,
         target_bytes: usize,
     ) -> Vec<ShadowPath> {
         // Get candidates based on policy
@@ -369,7 +369,7 @@ mod tests {
                 last_accessed: AtomicU64::new(0),
             };
             
-            entries.insert(path.clone(), entry);
+            entries.insert(path.clone(), std::sync::Arc::new(entry));
             tracker.record_access(path);
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
@@ -469,7 +469,7 @@ mod tests {
                     last_accessed: AtomicU64::new(0),
                 };
                 
-                entries.insert(path.clone(), entry);
+                entries.insert(path.clone(), std::sync::Arc::new(entry));
                 tracker.record_access(&path);
                 
                 path
