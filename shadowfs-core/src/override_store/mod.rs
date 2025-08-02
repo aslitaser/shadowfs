@@ -6,6 +6,7 @@ mod lru;
 mod size;
 mod directory;
 mod persistence;
+mod optimization;
 
 pub use entry::{OverrideEntry, OverrideContent};
 pub use memory::{MemoryTracker, MemoryGuard};
@@ -15,6 +16,10 @@ pub use directory::{DirectoryCache, PathTraversal};
 pub use persistence::{
     OverridePersistence, PersistenceOp, OverrideSnapshot, 
     PersistenceConfig, FileBasedPersistence
+};
+pub use optimization::{
+    ContentDeduplication, ReadThroughCache, PrefetchStrategy, 
+    DirectoryPrefetcher, ShardedMap, hash_content, compression
 };
 
 use crate::types::{FileMetadata, ShadowPath, DirectoryEntry};
@@ -39,6 +44,15 @@ pub struct OverrideStoreConfig {
     
     /// Threshold for triggering eviction (0.0 to 1.0)
     pub eviction_threshold: f64,
+    
+    /// Size of the read-through cache
+    pub cache_size: usize,
+    
+    /// Directory prefetch strategy
+    pub prefetch_strategy: PrefetchStrategy,
+    
+    /// Whether to enable compression for large files
+    pub enable_compression: bool,
 }
 
 impl Default for OverrideStoreConfig {
@@ -48,14 +62,17 @@ impl Default for OverrideStoreConfig {
             eviction_policy: EvictionPolicy::Lru,
             enable_memory_pressure: true,
             eviction_threshold: 0.9,
+            cache_size: 1000,
+            prefetch_strategy: PrefetchStrategy::Children,
+            enable_compression: true,
         }
     }
 }
 
 /// Store for managing file and directory overrides with memory limits.
 pub struct OverrideStore {
-    /// Map of path to override entries with Arc for zero-copy reads
-    pub(crate) entries: Arc<DashMap<ShadowPath, Arc<OverrideEntry>>>,
+    /// Sharded map of path to override entries with Arc for zero-copy reads
+    pub(crate) entries: Arc<ShardedMap<ShadowPath, Arc<OverrideEntry>>>,
     
     /// Memory tracker for allocation management
     pub(crate) memory_tracker: Arc<MemoryTracker>,
@@ -65,6 +82,15 @@ pub struct OverrideStore {
     
     /// Directory cache for parent-child relationships
     pub(crate) directory_cache: Arc<DirectoryCache>,
+    
+    /// Content deduplication system
+    pub(crate) content_dedup: Arc<ContentDeduplication>,
+    
+    /// Read-through cache for hot entries
+    pub(crate) hot_cache: Arc<ReadThroughCache<OverrideEntry>>,
+    
+    /// Directory prefetcher
+    pub(crate) prefetcher: Arc<RwLock<DirectoryPrefetcher>>,
     
     /// Runtime configuration that can be updated
     config: RwLock<OverrideStoreConfig>,
@@ -79,13 +105,19 @@ impl OverrideStore {
         let memory_tracker = Arc::new(MemoryTracker::new(config.max_memory));
         let lru_tracker = Arc::new(LruTracker::new());
         let directory_cache = Arc::new(DirectoryCache::new());
-        let entries = Arc::new(DashMap::new());
+        let entries = Arc::new(ShardedMap::new());
+        let content_dedup = Arc::new(ContentDeduplication::new());
+        let hot_cache = Arc::new(ReadThroughCache::new(config.cache_size));
+        let prefetcher = Arc::new(RwLock::new(DirectoryPrefetcher::new(config.prefetch_strategy)));
         
         Self {
             entries,
             memory_tracker,
             lru_tracker,
             directory_cache,
+            content_dedup,
+            hot_cache,
+            prefetcher,
             config: RwLock::new(config),
         }
     }
@@ -110,20 +142,39 @@ impl OverrideStore {
         content: Bytes,
         original_metadata: Option<FileMetadata>,
     ) -> Result<(), ShadowError> {
-        use sha2::{Sha256, Digest};
+        let config = self.config.read().unwrap();
+        let enable_compression = config.enable_compression;
+        drop(config);
         
-        // Calculate content hash
-        let mut hasher = Sha256::new();
-        hasher.update(&content);
-        let content_hash: [u8; 32] = hasher.finalize().into();
+        let original_size = content.len() as u64;
+        let mut data = content;
+        let mut is_compressed = false;
+        
+        // Apply compression if enabled and content is large enough
+        if enable_compression && compression::should_compress(&data) {
+            match compression::compress(&data) {
+                Ok(compressed) => {
+                    data = compressed;
+                    is_compressed = true;
+                }
+                Err(_) => {
+                    // Fall back to uncompressed if compression fails
+                }
+            }
+        }
+        
+        // Use BLAKE3 for content deduplication
+        let content_hash = hash_content(&data);
+        let (_hash, dedup_data) = self.content_dedup.store_content(data);
         
         let override_content = OverrideContent::File {
-            data: content.clone(),
+            data: (*dedup_data).clone(),
             content_hash,
+            is_compressed,
         };
         
         let override_metadata = FileMetadata {
-            size: content.len() as u64,
+            size: original_size, // Store original uncompressed size
             created: SystemTime::now(),
             modified: SystemTime::now(),
             accessed: SystemTime::now(),
@@ -267,8 +318,27 @@ impl OverrideStore {
     /// # Returns
     /// Arc to the override entry if found
     pub fn get(&self, path: &ShadowPath) -> Option<Arc<OverrideEntry>> {
+        // Check hot cache first
+        if let Some(entry) = self.hot_cache.get(path) {
+            // Update LRU tracker on access
+            self.lru_tracker.record_access(path);
+            
+            // Update last accessed time
+            let now = SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            entry.last_accessed.store(now, Ordering::Relaxed);
+            
+            return Some(entry);
+        }
+        
+        // Check main store
         if let Some(entry) = self.entries.get(path) {
             let entry_arc = entry.clone();
+            
+            // Add to hot cache
+            self.hot_cache.put(path.clone(), entry_arc.clone());
             
             // Update LRU tracker on access
             self.lru_tracker.record_access(path);
@@ -321,6 +391,9 @@ impl OverrideStore {
     /// The removed entry if it existed
     pub fn remove(&self, path: &ShadowPath) -> Option<Arc<OverrideEntry>> {
         if let Some((_, entry)) = self.entries.remove(path) {
+            // Remove from hot cache
+            self.hot_cache.remove(path);
+            
             // Remove from LRU tracker
             self.lru_tracker.remove_entry(path);
             
@@ -330,6 +403,13 @@ impl OverrideStore {
                 if !filename.is_empty() {
                     self.directory_cache.remove_child(&parent, &filename);
                 }
+            }
+            
+            // Handle content deduplication cleanup if this was a file
+            if let OverrideContent::File { content_hash, .. } = &entry.content {
+                // Note: In a full implementation, we'd need reference counting
+                // to know when to actually remove from dedup store
+                // For now, we leave it to avoid breaking other references
             }
             
             // Memory will be freed when the Arc is dropped
@@ -387,8 +467,18 @@ impl OverrideStore {
     pub fn insert_batch(&self, entries: Vec<(ShadowPath, OverrideContent)>) -> Result<(), ShadowError> {
         for (path, content) in entries {
             match content {
-                OverrideContent::File { data, .. } => {
-                    self.insert_file(path, data, None)?;
+                OverrideContent::File { data, is_compressed, .. } => {
+                    // For batch insert, use the original data and let insert_file handle optimization
+                    let original_data = if is_compressed {
+                        // If data was compressed, decompress it first
+                        compression::decompress(&data)
+                            .map_err(|e| ShadowError::Io { 
+                                message: format!("Failed to decompress batch data: {}", e) 
+                            })?
+                    } else {
+                        data
+                    };
+                    self.insert_file(path, original_data, None)?;
                 }
                 OverrideContent::Directory { .. } => {
                     self.insert_directory(path, None)?;
@@ -482,6 +572,17 @@ impl OverrideStore {
                     // It's a directory override, get children from cache
                     let children = self.directory_cache.get_children(path);
                     let mut entries = Vec::new();
+                    
+                    // Apply prefetching strategy
+                    let prefetcher = self.prefetcher.read().unwrap();
+                    let prefetch_paths = prefetcher.get_prefetch_paths(path, &children);
+                    drop(prefetcher);
+                    
+                    // Prefetch likely-to-be-accessed children
+                    for prefetch_path in prefetch_paths {
+                        // Trigger a get to load into hot cache
+                        self.get(&prefetch_path);
+                    }
                     
                     for child_name in children {
                         let child_path = path.join(&child_name);
@@ -646,5 +747,65 @@ impl OverrideStore {
     /// Vector of child names
     pub fn get_directory_children(&self, parent: &ShadowPath) -> Vec<String> {
         self.directory_cache.get_children(parent)
+    }
+    
+    /// Gets optimization statistics.
+    ///
+    /// # Returns
+    /// Tuple of (dedup_entries, dedup_bytes, cache_entries, cache_capacity)
+    pub fn optimization_stats(&self) -> (usize, usize, usize, usize) {
+        let (dedup_entries, dedup_bytes) = self.content_dedup.stats();
+        let (cache_entries, cache_capacity) = self.hot_cache.stats();
+        (dedup_entries, dedup_bytes, cache_entries, cache_capacity)
+    }
+    
+    /// Updates the prefetch strategy.
+    ///
+    /// # Arguments
+    /// * `strategy` - New prefetch strategy
+    pub fn set_prefetch_strategy(&self, strategy: PrefetchStrategy) {
+        let mut prefetcher = self.prefetcher.write().unwrap();
+        prefetcher.set_strategy(strategy);
+    }
+    
+    /// Gets the current prefetch strategy.
+    ///
+    /// # Returns
+    /// Current prefetch strategy
+    pub fn get_prefetch_strategy(&self) -> PrefetchStrategy {
+        let prefetcher = self.prefetcher.read().unwrap();
+        prefetcher.strategy()
+    }
+    
+    /// Clears the hot cache.
+    pub fn clear_cache(&self) {
+        self.hot_cache.clear();
+    }
+    
+    /// Gets detailed performance metrics.
+    ///
+    /// # Returns
+    /// String containing formatted performance statistics
+    pub fn performance_report(&self) -> String {
+        let (current_memory, max_memory, pressure) = self.memory_stats();
+        let (dedup_entries, dedup_bytes, cache_entries, cache_capacity) = self.optimization_stats();
+        let (dir_count, total_children) = self.directory_stats();
+        let entry_count = self.entry_count();
+        
+        format!(
+            "OverrideStore Performance Report:\n\
+             Memory: {}/{} bytes ({:.1}% pressure)\n\
+             Entries: {} total, {} sharded\n\
+             Deduplication: {} unique contents, {} bytes saved\n\
+             Hot Cache: {}/{} entries\n\
+             Directories: {} tracked, {} total children\n\
+             Prefetch Strategy: {:?}",
+            current_memory, max_memory, pressure * 100.0,
+            entry_count, entry_count,
+            dedup_entries, dedup_bytes,
+            cache_entries, cache_capacity,
+            dir_count, total_children,
+            self.get_prefetch_strategy()
+        )
     }
 }
