@@ -330,3 +330,201 @@ mod tests {
         assert!(!perms_writeable.readonly);
     }
 }
+
+/// A handle to an open file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FileHandle(pub u64);
+
+/// Flags for opening a file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct OpenFlags {
+    /// Whether to open for reading
+    pub read: bool,
+    /// Whether to open for writing
+    pub write: bool,
+    /// Whether to create the file if it doesn't exist
+    pub create: bool,
+    /// Whether to truncate the file on open
+    pub truncate: bool,
+    /// Whether to append to the file
+    pub append: bool,
+    /// Whether to create a new file (fail if exists)
+    pub create_new: bool,
+}
+
+impl OpenFlags {
+    /// Creates a new OpenFlags instance with all flags set to false.
+    pub fn new() -> Self {
+        Self {
+            read: false,
+            write: false,
+            create: false,
+            truncate: false,
+            append: false,
+            create_new: false,
+        }
+    }
+
+    /// Creates flags for read-only access.
+    pub fn read_only() -> Self {
+        Self {
+            read: true,
+            ..Self::new()
+        }
+    }
+
+    /// Creates flags for write-only access.
+    pub fn write_only() -> Self {
+        Self {
+            write: true,
+            ..Self::new()
+        }
+    }
+
+    /// Creates flags for read-write access.
+    pub fn read_write() -> Self {
+        Self {
+            read: true,
+            write: true,
+            ..Self::new()
+        }
+    }
+}
+
+impl Default for OpenFlags {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// A wrapper around byte data.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Bytes(Vec<u8>);
+
+impl Bytes {
+    /// Creates a new Bytes instance from a vector.
+    pub fn new(data: Vec<u8>) -> Self {
+        Self(data)
+    }
+
+    /// Creates an empty Bytes instance.
+    pub fn empty() -> Self {
+        Self(Vec::new())
+    }
+
+    /// Returns the length of the data.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Returns true if the data is empty.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Returns the data as a slice.
+    pub fn as_slice(&self) -> &[u8] {
+        &self.0
+    }
+
+    /// Consumes self and returns the underlying vector.
+    pub fn into_vec(self) -> Vec<u8> {
+        self.0
+    }
+}
+
+impl From<Vec<u8>> for Bytes {
+    fn from(data: Vec<u8>) -> Self {
+        Self::new(data)
+    }
+}
+
+impl From<&[u8]> for Bytes {
+    fn from(data: &[u8]) -> Self {
+        Self::new(data.to_vec())
+    }
+}
+
+impl AsRef<[u8]> for Bytes {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+/// Represents all possible filesystem operations.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FileOperation {
+    /// Open a file with specified flags.
+    Open {
+        /// Path to the file to open
+        path: ShadowPath,
+        /// Flags for opening the file
+        flags: OpenFlags,
+    },
+    /// Read data from an open file.
+    Read {
+        /// Handle to the open file
+        handle: FileHandle,
+        /// Offset to start reading from
+        offset: u64,
+        /// Number of bytes to read
+        length: usize,
+    },
+    /// Write data to an open file.
+    Write {
+        /// Handle to the open file
+        handle: FileHandle,
+        /// Offset to start writing at
+        offset: u64,
+        /// Data to write
+        data: Bytes,
+    },
+    /// Close an open file.
+    Close {
+        /// Handle to the file to close
+        handle: FileHandle,
+    },
+    /// Get metadata for a file or directory.
+    GetMetadata {
+        /// Path to get metadata for
+        path: ShadowPath,
+    },
+    /// Set metadata for a file or directory.
+    SetMetadata {
+        /// Path to set metadata for
+        path: ShadowPath,
+        /// New metadata to set
+        metadata: FileMetadata,
+    },
+    /// Read the contents of a directory.
+    ReadDirectory {
+        /// Path to the directory to read
+        path: ShadowPath,
+    },
+    /// Create a new file.
+    CreateFile {
+        /// Path where the file should be created
+        path: ShadowPath,
+        /// Permissions for the new file
+        permissions: FilePermissions,
+    },
+    /// Create a new directory.
+    CreateDirectory {
+        /// Path where the directory should be created
+        path: ShadowPath,
+        /// Permissions for the new directory
+        permissions: FilePermissions,
+    },
+    /// Delete a file or directory.
+    Delete {
+        /// Path to delete
+        path: ShadowPath,
+    },
+    /// Rename a file or directory.
+    Rename {
+        /// Source path
+        from: ShadowPath,
+        /// Destination path
+        to: ShadowPath,
+    },
+}
