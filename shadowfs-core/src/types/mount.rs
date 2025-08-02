@@ -1,7 +1,151 @@
 //! Mount-related types and configuration.
 
 use std::collections::HashMap;
-use crate::types::FilePermissions;
+use std::path::PathBuf;
+use std::time::SystemTime;
+use uuid::Uuid;
+use tokio::sync::oneshot;
+use crate::types::{FilePermissions, ShadowPath};
+
+/// Represents the platform where the filesystem is mounted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Platform {
+    Windows,
+    MacOS,
+    Linux,
+}
+
+impl Platform {
+    /// Returns the current platform based on the target OS.
+    pub fn current() -> Self {
+        #[cfg(target_os = "windows")]
+        return Platform::Windows;
+        
+        #[cfg(target_os = "macos")]
+        return Platform::MacOS;
+        
+        #[cfg(target_os = "linux")]
+        return Platform::Linux;
+        
+        #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+        compile_error!("Unsupported platform");
+    }
+}
+
+impl std::fmt::Display for Platform {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Platform::Windows => write!(f, "Windows"),
+            Platform::MacOS => write!(f, "macOS"),
+            Platform::Linux => write!(f, "Linux"),
+        }
+    }
+}
+
+/// Handle representing a mounted filesystem with platform-specific details.
+pub struct MountHandle {
+    /// Unique identifier for this mount
+    pub id: Uuid,
+    
+    /// Source path that was mounted
+    pub source: ShadowPath,
+    
+    /// Target mount point
+    pub target: ShadowPath,
+    
+    /// Platform where the filesystem is mounted
+    pub platform: Platform,
+    
+    /// Time when the filesystem was mounted
+    pub mount_time: SystemTime,
+    
+    /// Channel sender for unmount signal (private)
+    unmount_sender: Option<oneshot::Sender<()>>,
+}
+
+impl MountHandle {
+    /// Creates a new mount handle.
+    pub fn new(
+        source: ShadowPath,
+        target: ShadowPath,
+        platform: Platform,
+        unmount_sender: oneshot::Sender<()>,
+    ) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            source,
+            target,
+            platform,
+            mount_time: SystemTime::now(),
+            unmount_sender: Some(unmount_sender),
+        }
+    }
+    
+    /// Creates a new mount handle with a specific ID (useful for testing).
+    pub fn with_id(
+        id: Uuid,
+        source: ShadowPath,
+        target: ShadowPath,
+        platform: Platform,
+        unmount_sender: oneshot::Sender<()>,
+    ) -> Self {
+        Self {
+            id,
+            source,
+            target,
+            platform,
+            mount_time: SystemTime::now(),
+            unmount_sender: Some(unmount_sender),
+        }
+    }
+    
+    /// Sends the unmount signal.
+    /// Returns true if the signal was sent successfully, false if already sent.
+    pub fn unmount(&mut self) -> bool {
+        if let Some(sender) = self.unmount_sender.take() {
+            sender.send(()).is_ok()
+        } else {
+            false
+        }
+    }
+    
+    /// Returns true if this mount handle is still active (unmount not called).
+    pub fn is_active(&self) -> bool {
+        self.unmount_sender.is_some()
+    }
+    
+    /// Returns the duration since the filesystem was mounted.
+    pub fn uptime(&self) -> Result<std::time::Duration, std::time::SystemTimeError> {
+        self.mount_time.elapsed()
+    }
+}
+
+impl std::fmt::Debug for MountHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MountHandle")
+            .field("id", &self.id)
+            .field("source", &self.source)
+            .field("target", &self.target)
+            .field("platform", &self.platform)
+            .field("mount_time", &self.mount_time)
+            .field("is_active", &self.is_active())
+            .finish()
+    }
+}
+
+impl PartialEq for MountHandle {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
+}
+
+impl Eq for MountHandle {}
+
+impl std::hash::Hash for MountHandle {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+    }
+}
 
 /// Configuration options for mounting a shadow filesystem.
 #[derive(Debug, Clone)]
@@ -206,27 +350,23 @@ pub struct CacheConfig {
     /// Whether caching is enabled
     pub enabled: bool,
     
-    /// Maximum number of cached metadata entries
-    pub max_metadata_entries: usize,
+    /// Maximum size of the cache in bytes
+    pub max_size_bytes: usize,
     
-    /// Maximum total size of cached file data in bytes
-    pub max_data_size: usize,
+    /// Time-to-live for cache entries in seconds
+    pub ttl_seconds: u64,
     
-    /// Time-to-live for metadata cache entries in seconds
-    pub metadata_ttl_secs: u64,
-    
-    /// Time-to-live for data cache entries in seconds
-    pub data_ttl_secs: u64,
+    /// Maximum number of entries in the stat cache
+    pub stat_cache_size: usize,
 }
 
 impl Default for CacheConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            max_metadata_entries: 10_000,
-            max_data_size: 100 * 1024 * 1024, // 100 MB
-            metadata_ttl_secs: 60,
-            data_ttl_secs: 300,
+            max_size_bytes: 100 * 1024 * 1024, // 100 MB
+            ttl_seconds: 300, // 5 minutes
+            stat_cache_size: 10_000,
         }
     }
 }
@@ -244,10 +384,9 @@ impl CacheConfig {
     pub fn minimal() -> Self {
         Self {
             enabled: true,
-            max_metadata_entries: 1_000,
-            max_data_size: 10 * 1024 * 1024, // 10 MB
-            metadata_ttl_secs: 10,
-            data_ttl_secs: 30,
+            max_size_bytes: 10 * 1024 * 1024, // 10 MB
+            ttl_seconds: 60, // 1 minute
+            stat_cache_size: 1_000,
         }
     }
     
@@ -255,10 +394,9 @@ impl CacheConfig {
     pub fn aggressive() -> Self {
         Self {
             enabled: true,
-            max_metadata_entries: 100_000,
-            max_data_size: 1024 * 1024 * 1024, // 1 GB
-            metadata_ttl_secs: 600,
-            data_ttl_secs: 3600,
+            max_size_bytes: 1024 * 1024 * 1024, // 1 GB
+            ttl_seconds: 3600, // 1 hour
+            stat_cache_size: 100_000,
         }
     }
 }
@@ -266,69 +404,56 @@ impl CacheConfig {
 /// Configuration for the override store.
 #[derive(Debug, Clone)]
 pub struct OverrideConfig {
-    /// Maximum total size of overrides in bytes (0 = unlimited)
-    pub max_total_size: usize,
-    
-    /// Maximum size of a single override in bytes
-    pub max_file_size: usize,
+    /// Maximum memory usage for overrides in bytes
+    pub max_memory_bytes: usize,
     
     /// Whether to persist overrides to disk
     pub persist_to_disk: bool,
     
     /// Path to store persistent overrides (if enabled)
-    pub persistence_path: Option<String>,
-    
-    /// Whether to compress overrides in memory
-    pub compress: bool,
-    
-    /// Compression level (1-9) if compression is enabled
-    pub compression_level: u8,
+    pub persist_path: Option<PathBuf>,
 }
 
 impl Default for OverrideConfig {
     fn default() -> Self {
         Self {
-            max_total_size: 0, // unlimited
-            max_file_size: 100 * 1024 * 1024, // 100 MB per file
+            max_memory_bytes: 100 * 1024 * 1024, // 100 MB
             persist_to_disk: false,
-            persistence_path: None,
-            compress: false,
-            compression_level: 6,
+            persist_path: None,
         }
     }
 }
 
 impl OverrideConfig {
-    /// Creates a memory-only configuration with no limits.
-    pub fn memory_only() -> Self {
-        Self::default()
-    }
-    
-    /// Creates a configuration with size limits.
-    pub fn with_limits(max_total: usize, max_file: usize) -> Self {
+    /// Creates a memory-only configuration with a specific size limit.
+    pub fn memory_only(max_bytes: usize) -> Self {
         Self {
-            max_total_size: max_total,
-            max_file_size: max_file,
-            ..Default::default()
+            max_memory_bytes: max_bytes,
+            persist_to_disk: false,
+            persist_path: None,
         }
     }
     
     /// Creates a configuration with disk persistence.
-    pub fn persistent(path: impl Into<String>) -> Self {
+    pub fn persistent(path: impl Into<PathBuf>, max_bytes: usize) -> Self {
         Self {
+            max_memory_bytes: max_bytes,
             persist_to_disk: true,
-            persistence_path: Some(path.into()),
-            ..Default::default()
+            persist_path: Some(path.into()),
         }
     }
     
-    /// Creates a configuration with compression enabled.
-    pub fn compressed(level: u8) -> Self {
-        Self {
-            compress: true,
-            compression_level: level.clamp(1, 9),
-            ..Default::default()
-        }
+    /// Enables persistence with the given path.
+    pub fn with_persistence(mut self, path: impl Into<PathBuf>) -> Self {
+        self.persist_to_disk = true;
+        self.persist_path = Some(path.into());
+        self
+    }
+    
+    /// Sets the maximum memory usage.
+    pub fn with_max_memory(mut self, bytes: usize) -> Self {
+        self.max_memory_bytes = bytes;
+        self
     }
 }
 
@@ -390,36 +515,44 @@ mod tests {
         
         let minimal = CacheConfig::minimal();
         assert!(minimal.enabled);
-        assert_eq!(minimal.max_metadata_entries, 1_000);
-        assert_eq!(minimal.max_data_size, 10 * 1024 * 1024);
+        assert_eq!(minimal.max_size_bytes, 10 * 1024 * 1024);
+        assert_eq!(minimal.ttl_seconds, 60);
+        assert_eq!(minimal.stat_cache_size, 1_000);
         
         let aggressive = CacheConfig::aggressive();
         assert!(aggressive.enabled);
-        assert_eq!(aggressive.max_metadata_entries, 100_000);
-        assert_eq!(aggressive.max_data_size, 1024 * 1024 * 1024);
+        assert_eq!(aggressive.max_size_bytes, 1024 * 1024 * 1024);
+        assert_eq!(aggressive.ttl_seconds, 3600);
+        assert_eq!(aggressive.stat_cache_size, 100_000);
     }
 
     #[test]
     fn test_override_config_presets() {
-        let memory = OverrideConfig::memory_only();
+        let memory = OverrideConfig::memory_only(50 * 1024 * 1024);
         assert!(!memory.persist_to_disk);
-        assert_eq!(memory.max_total_size, 0);
+        assert_eq!(memory.max_memory_bytes, 50 * 1024 * 1024);
+        assert!(memory.persist_path.is_none());
         
-        let limited = OverrideConfig::with_limits(100 * 1024 * 1024, 10 * 1024 * 1024);
-        assert_eq!(limited.max_total_size, 100 * 1024 * 1024);
-        assert_eq!(limited.max_file_size, 10 * 1024 * 1024);
-        
-        let persistent = OverrideConfig::persistent("/tmp/shadowfs");
+        let persistent = OverrideConfig::persistent("/tmp/shadowfs", 200 * 1024 * 1024);
         assert!(persistent.persist_to_disk);
-        assert_eq!(persistent.persistence_path, Some("/tmp/shadowfs".to_string()));
+        assert_eq!(persistent.max_memory_bytes, 200 * 1024 * 1024);
+        assert_eq!(persistent.persist_path, Some(PathBuf::from("/tmp/shadowfs")));
         
-        let compressed = OverrideConfig::compressed(9);
-        assert!(compressed.compress);
-        assert_eq!(compressed.compression_level, 9);
+        let default = OverrideConfig::default();
+        assert!(!default.persist_to_disk);
+        assert_eq!(default.max_memory_bytes, 100 * 1024 * 1024);
+        assert!(default.persist_path.is_none());
+    }
+    
+    #[test]
+    fn test_override_config_builder_style() {
+        let config = OverrideConfig::default()
+            .with_max_memory(64 * 1024 * 1024)
+            .with_persistence("/var/shadowfs");
         
-        // Test clamping
-        let over_compressed = OverrideConfig::compressed(15);
-        assert_eq!(over_compressed.compression_level, 9);
+        assert!(config.persist_to_disk);
+        assert_eq!(config.max_memory_bytes, 64 * 1024 * 1024);
+        assert_eq!(config.persist_path, Some(PathBuf::from("/var/shadowfs")));
     }
 
     #[test]
@@ -440,5 +573,77 @@ mod tests {
         assert_eq!(gid_map.len(), 2);
         assert_eq!(gid_map.get(&100), Some(&200));
         assert_eq!(gid_map.get(&101), Some(&201));
+    }
+    
+    #[test]
+    fn test_mount_handle() {
+        let (tx, _rx) = oneshot::channel();
+        let source = ShadowPath::from("/source");
+        let target = ShadowPath::from("/target");
+        let mut handle = MountHandle::new(
+            source.clone(),
+            target.clone(),
+            Platform::current(),
+            tx,
+        );
+        
+        assert_eq!(handle.source, source);
+        assert_eq!(handle.target, target);
+        assert_eq!(handle.platform, Platform::current());
+        assert!(handle.is_active());
+        
+        // Test unmount
+        assert!(handle.unmount());
+        assert!(!handle.is_active());
+        assert!(!handle.unmount()); // Second unmount should fail
+    }
+    
+    #[test]
+    fn test_mount_handle_with_id() {
+        let id = Uuid::new_v4();
+        let (tx, _rx) = oneshot::channel();
+        let handle = MountHandle::with_id(
+            id,
+            ShadowPath::from("/source"),
+            ShadowPath::from("/target"),
+            Platform::Linux,
+            tx,
+        );
+        
+        assert_eq!(handle.id, id);
+        assert_eq!(handle.platform, Platform::Linux);
+    }
+    
+    #[test]
+    fn test_platform_display() {
+        assert_eq!(Platform::Windows.to_string(), "Windows");
+        assert_eq!(Platform::MacOS.to_string(), "macOS");
+        assert_eq!(Platform::Linux.to_string(), "Linux");
+    }
+    
+    #[test]
+    fn test_mount_handle_equality() {
+        let id = Uuid::new_v4();
+        let (tx1, _rx1) = oneshot::channel();
+        let (tx2, _rx2) = oneshot::channel();
+        
+        let handle1 = MountHandle::with_id(
+            id,
+            ShadowPath::from("/source1"),
+            ShadowPath::from("/target1"),
+            Platform::Linux,
+            tx1,
+        );
+        
+        let handle2 = MountHandle::with_id(
+            id,
+            ShadowPath::from("/source2"),
+            ShadowPath::from("/target2"),
+            Platform::Windows,
+            tx2,
+        );
+        
+        // Handles are equal if IDs are equal
+        assert_eq!(handle1, handle2);
     }
 }
