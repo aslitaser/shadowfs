@@ -352,68 +352,63 @@ impl LruTracker {
         entries: &DashMap<ShadowPath, OverrideEntry>,
         target_bytes: usize,
     ) -> Vec<ShadowPath> {
-        let mut candidates: Vec<(ShadowPath, f64)> = match policy {
+        // Get candidates based on policy
+        let candidates: Vec<ShadowPath> = match policy {
             EvictionPolicy::Lru => {
-                // Get all paths ordered by access time
-                // IndexMap preserves insertion order, so first entries are oldest
+                // IndexMap preserves order - first entries are least recently used
                 let order = self.access_order.lock().unwrap();
-                order.iter()
-                    .map(|(path, instant)| {
-                        let age = instant.elapsed().as_secs_f64();
-                        (path.clone(), age)
-                    })
-                    .collect()
+                order.keys().cloned().collect()
             }
             
             EvictionPolicy::Lfu => {
-                // Get all paths ordered by access frequency
-                self.access_count
+                // Sort by access count (ascending)
+                let mut freq_list: Vec<_> = self.access_count
                     .iter()
                     .map(|entry| {
                         let path = entry.key().clone();
-                        let count = entry.value().load(Ordering::Relaxed) as f64;
-                        // Lower count = higher priority for eviction
-                        (path, -count)
+                        let count = entry.value().load(Ordering::Relaxed);
+                        (path, count)
                     })
-                    .collect()
+                    .collect();
+                
+                freq_list.sort_by_key(|(_, count)| *count);
+                freq_list.into_iter().map(|(path, _)| path).collect()
             }
             
             EvictionPolicy::Fifo => {
-                // Get all paths ordered by creation time
-                entries.iter()
+                // Sort by creation time (oldest first)
+                let mut time_list: Vec<_> = entries.iter()
                     .map(|entry| {
                         let path = entry.key().clone();
-                        let age = entry.value().created_at.elapsed()
-                            .unwrap_or_default().as_secs_f64();
-                        (path, age)
+                        let created = entry.value().created_at;
+                        (path, created)
                     })
-                    .collect()
+                    .collect();
+                
+                time_list.sort_by_key(|(_, time)| *time);
+                time_list.into_iter().map(|(path, _)| path).collect()
             }
             
             EvictionPolicy::SizeWeighted => {
-                // Get all paths ordered by size (largest first)
-                entries.iter()
+                // Sort by size (largest first)
+                let mut size_list: Vec<_> = entries.iter()
                     .map(|entry| {
                         let path = entry.key().clone();
-                        let size = calculate_entry_size(entry.value()) as f64;
-                        // Larger size = higher priority for eviction
-                        (path, -size)
+                        let size = calculate_entry_size(entry.value());
+                        (path, size)
                     })
-                    .collect()
+                    .collect();
+                
+                size_list.sort_by_key(|(_, size)| std::cmp::Reverse(*size));
+                size_list.into_iter().map(|(path, _)| path).collect()
             }
         };
-        
-        // Sort by score 
-        // For LRU/FIFO: higher age = higher priority for eviction (sort descending)
-        // For LFU: negative count used, so lower score = higher priority (sort ascending)
-        // For SizeWeighted: negative size used, so lower score = higher priority (sort ascending)
-        candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
         
         // Select victims until we reach target bytes
         let mut victims = Vec::new();
         let mut freed_bytes = 0;
         
-        for (path, _score) in candidates {
+        for path in candidates {
             if freed_bytes >= target_bytes {
                 break;
             }
