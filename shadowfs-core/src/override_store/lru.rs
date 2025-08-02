@@ -39,7 +39,7 @@ impl AccessStats {
 }
 
 /// Eviction policy for when memory limits are reached.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum EvictionPolicy {
     /// Evict least recently used entries
     Lru,

@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 /// A normalized path representation for ShadowFS that provides
 /// platform-agnostic path handling and comparison.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct ShadowPath {
     inner: PathBuf,
 }

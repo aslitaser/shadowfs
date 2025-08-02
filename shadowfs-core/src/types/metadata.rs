@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use bytes::Bytes;
 
 /// Represents the type of a file system entry.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum FileType {
     /// Regular file
     File,
@@ -90,7 +90,7 @@ impl FilePermissions {
 }
 
 /// Platform-specific metadata.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum PlatformMetadata {
     /// Windows-specific metadata
     Windows {
@@ -178,7 +178,7 @@ pub struct LinuxMetadata {
 }
 
 /// Complete metadata for a file system entry.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FileMetadata {
     /// Size in bytes
     pub size: u64,

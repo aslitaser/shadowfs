@@ -5,12 +5,17 @@ mod memory;
 mod lru;
 mod size;
 mod directory;
+mod persistence;
 
 pub use entry::{OverrideEntry, OverrideContent};
 pub use memory::{MemoryTracker, MemoryGuard};
 pub use lru::{LruTracker, AccessStats, EvictionPolicy};
 pub use size::{calculate_bytes_size, calculate_entry_size};
 pub use directory::{DirectoryCache, PathTraversal};
+pub use persistence::{
+    OverridePersistence, PersistenceOp, OverrideSnapshot, 
+    PersistenceConfig, FileBasedPersistence
+};
 
 use crate::types::{FileMetadata, ShadowPath, DirectoryEntry};
 use crate::error::ShadowError;
@@ -21,7 +26,7 @@ use std::sync::{Arc, RwLock};
 use std::time::SystemTime;
 
 /// Configuration for the override store.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct OverrideStoreConfig {
     /// Maximum memory usage in bytes
     pub max_memory: usize,
@@ -50,16 +55,16 @@ impl Default for OverrideStoreConfig {
 /// Store for managing file and directory overrides with memory limits.
 pub struct OverrideStore {
     /// Map of path to override entries with Arc for zero-copy reads
-    entries: Arc<DashMap<ShadowPath, Arc<OverrideEntry>>>,
+    pub(crate) entries: Arc<DashMap<ShadowPath, Arc<OverrideEntry>>>,
     
     /// Memory tracker for allocation management
-    memory_tracker: Arc<MemoryTracker>,
+    pub(crate) memory_tracker: Arc<MemoryTracker>,
     
     /// LRU tracker for access patterns and eviction
-    lru_tracker: Arc<LruTracker>,
+    pub(crate) lru_tracker: Arc<LruTracker>,
     
     /// Directory cache for parent-child relationships
-    directory_cache: Arc<DirectoryCache>,
+    pub(crate) directory_cache: Arc<DirectoryCache>,
     
     /// Runtime configuration that can be updated
     config: RwLock<OverrideStoreConfig>,
@@ -192,7 +197,7 @@ impl OverrideStore {
     }
     
     /// Internal method to insert an entry with memory management.
-    fn insert_entry(
+    pub(crate) fn insert_entry(
         &self,
         path: ShadowPath,
         content: OverrideContent,
@@ -622,5 +627,24 @@ impl OverrideStore {
             self.directory_cache.directory_count(),
             self.directory_cache.total_child_count()
         )
+    }
+    
+    /// Gets all parent directories being tracked in the cache.
+    ///
+    /// # Returns
+    /// Vector of all parent directory paths
+    pub fn get_all_parent_directories(&self) -> Vec<ShadowPath> {
+        self.directory_cache.get_all_parents()
+    }
+    
+    /// Gets children of a specific directory.
+    ///
+    /// # Arguments
+    /// * `parent` - Parent directory path
+    ///
+    /// # Returns
+    /// Vector of child names
+    pub fn get_directory_children(&self, parent: &ShadowPath) -> Vec<String> {
+        self.directory_cache.get_children(parent)
     }
 }
