@@ -415,7 +415,7 @@ mod tests {
                 created_at: SystemTime::now(),
                 last_accessed: AtomicU64::new(0),
             };
-            entries.insert((*path).clone(), entry);
+            entries.insert((*path).clone(), std::sync::Arc::new(entry));
         }
         
         // Access with different frequencies
