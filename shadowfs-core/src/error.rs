@@ -136,18 +136,10 @@ impl ShadowError {
                         reason: error.to_string() 
                     }
                 } else {
-                    ShadowError::InvalidArgument(error.to_string())
-                }
-            }
-            ErrorKind::WouldBlock => ShadowError::WouldBlock,
-            ErrorKind::BrokenPipe => ShadowError::BrokenPipe,
-            ErrorKind::ConnectionAborted => ShadowError::ConnectionAborted,
-            ErrorKind::ConnectionReset => ShadowError::ConnectionReset,
-            ErrorKind::Interrupted => ShadowError::Interrupted,
-            ErrorKind::OutOfMemory => {
-                ShadowError::OverrideStoreFull { 
-                    current_size: 0, 
-                    max_size: 0 
+                    ShadowError::InvalidPath {
+                        path: String::new(),
+                        reason: error.to_string()
+                    }
                 }
             }
             _ => ShadowError::IoError { source: error }
@@ -251,9 +243,62 @@ mod tests {
 
     #[test]
     fn test_io_error_conversion() {
-        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file not found");
+        // Test basic conversion without path
+        let io_err = std::io::Error::new(std::io::ErrorKind::Other, "generic error");
         let shadow_err: ShadowError = io_err.into();
         assert!(matches!(shadow_err, ShadowError::IoError { .. }));
+    }
+
+    #[test]
+    fn test_io_error_conversion_with_path() {
+        let path = ShadowPath::from("/test/file.txt");
+
+        // Test NotFound conversion
+        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "not found");
+        let shadow_err = ShadowError::from_io_error(io_err, Some(&path));
+        assert!(matches!(shadow_err, ShadowError::NotFound { path: p } if p == path));
+
+        // Test PermissionDenied conversion
+        let io_err = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied");
+        let shadow_err = ShadowError::from_io_error(io_err, Some(&path));
+        assert!(matches!(
+            shadow_err, 
+            ShadowError::PermissionDenied { path: p, operation } 
+            if p == path && operation == "access"
+        ));
+
+        // Test AlreadyExists conversion
+        let io_err = std::io::Error::new(std::io::ErrorKind::AlreadyExists, "exists");
+        let shadow_err = ShadowError::from_io_error(io_err, Some(&path));
+        assert!(matches!(shadow_err, ShadowError::AlreadyExists { path: p } if p == path));
+
+        // Test InvalidInput conversion
+        let io_err = std::io::Error::new(std::io::ErrorKind::InvalidInput, "invalid");
+        let shadow_err = ShadowError::from_io_error(io_err, Some(&path));
+        assert!(matches!(
+            shadow_err, 
+            ShadowError::InvalidPath { path: p, .. } 
+            if p == path.to_string()
+        ));
+    }
+
+    #[test]
+    fn test_io_error_with_operation() {
+        let path = ShadowPath::from("/test/file.txt");
+        
+        // Test PermissionDenied with custom operation
+        let io_err = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "denied");
+        let shadow_err = ShadowError::from_io_error_with_operation(io_err, &path, "write");
+        assert!(matches!(
+            shadow_err, 
+            ShadowError::PermissionDenied { path: p, operation } 
+            if p == path && operation == "write"
+        ));
+
+        // Test other error kinds fallback to from_io_error
+        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "not found");
+        let shadow_err = ShadowError::from_io_error_with_operation(io_err, &path, "read");
+        assert!(matches!(shadow_err, ShadowError::NotFound { path: p } if p == path));
     }
 
     #[test]
