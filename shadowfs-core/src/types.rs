@@ -385,11 +385,62 @@ mod tests {
         assert!(truncated.contains(OpenFlags::WRITE));
         assert_eq!(truncated.bits(), 0b000011);
     }
+    
+    #[test]
+    fn test_file_handle() {
+        let handle = FileHandle::new(42);
+        assert_eq!(handle.id(), 42);
+        assert!(handle.is_valid());
+        
+        let invalid = FileHandle::invalid();
+        assert_eq!(invalid.id(), 0);
+        assert!(!invalid.is_valid());
+        
+        let handle2 = FileHandle::new(42);
+        assert_eq!(handle, handle2);
+        
+        let handle3 = FileHandle::new(43);
+        assert_ne!(handle, handle3);
+    }
+    
+    #[test]
+    fn test_file_handle_display() {
+        let handle = FileHandle::new(12345);
+        assert_eq!(format!("{}", handle), "FileHandle(12345)");
+    }
 }
 
 /// A handle to an open file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct FileHandle(pub u64);
+pub struct FileHandle(u64);
+
+impl FileHandle {
+    /// Creates a new FileHandle with the given ID.
+    pub fn new(id: u64) -> Self {
+        Self(id)
+    }
+    
+    /// Returns the underlying handle ID.
+    pub fn id(&self) -> u64 {
+        self.0
+    }
+    
+    /// Creates an invalid/null handle (useful for error cases).
+    pub fn invalid() -> Self {
+        Self(0)
+    }
+    
+    /// Checks if this handle is valid (non-zero).
+    pub fn is_valid(&self) -> bool {
+        self.0 != 0
+    }
+}
+
+impl fmt::Display for FileHandle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "FileHandle({})", self.0)
+    }
+}
 
 /// Flags for opening a file using bitflags.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
