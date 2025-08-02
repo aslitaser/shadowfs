@@ -1,5 +1,6 @@
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 
 /// A normalized path representation for ShadowFS that provides
 /// platform-agnostic path handling and comparison.
@@ -97,6 +98,117 @@ impl From<PathBuf> for ShadowPath {
 impl AsRef<Path> for ShadowPath {
     fn as_ref(&self) -> &Path {
         &self.inner
+    }
+}
+
+/// Represents the type of a file system entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FileType {
+    /// Regular file
+    File,
+    /// Directory
+    Directory,
+    /// Symbolic link
+    Symlink,
+}
+
+/// Represents file permissions in a platform-agnostic way.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FilePermissions {
+    /// Unix-style permissions (rwxrwxrwx)
+    pub mode: u32,
+    /// Whether the file is read-only
+    pub readonly: bool,
+}
+
+impl FilePermissions {
+    /// Creates a new FilePermissions instance.
+    pub fn new(mode: u32, readonly: bool) -> Self {
+        Self { mode, readonly }
+    }
+
+    /// Returns default permissions for a file.
+    pub fn default_file() -> Self {
+        Self {
+            mode: 0o644,
+            readonly: false,
+        }
+    }
+
+    /// Returns default permissions for a directory.
+    pub fn default_directory() -> Self {
+        Self {
+            mode: 0o755,
+            readonly: false,
+        }
+    }
+}
+
+/// Platform-specific metadata.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PlatformMetadata {
+    /// Windows-specific metadata
+    Windows {
+        /// File attributes (hidden, system, archive, etc.)
+        attributes: u32,
+        /// Reparse point tag (for symlinks and other special files)
+        reparse_tag: Option<u32>,
+    },
+    /// macOS-specific metadata
+    MacOS {
+        /// BSD flags
+        flags: u32,
+        /// Extended attributes count
+        xattr_count: usize,
+    },
+    /// Linux-specific metadata
+    Linux {
+        /// Inode number
+        inode: u64,
+        /// Number of hard links
+        nlink: u64,
+    },
+}
+
+/// Complete metadata for a file system entry.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FileMetadata {
+    /// Size in bytes
+    pub size: u64,
+    /// Creation time
+    pub created: SystemTime,
+    /// Last modification time
+    pub modified: SystemTime,
+    /// Last access time
+    pub accessed: SystemTime,
+    /// File permissions
+    pub permissions: FilePermissions,
+    /// Type of file system entry
+    pub file_type: FileType,
+    /// Platform-specific metadata
+    pub platform_specific: PlatformMetadata,
+}
+
+impl FileMetadata {
+    /// Creates a new FileMetadata instance.
+    pub fn new(
+        size: u64,
+        created: SystemTime,
+        modified: SystemTime,
+        accessed: SystemTime,
+        permissions: FilePermissions,
+        file_type: FileType,
+        platform_specific: PlatformMetadata,
+    ) -> Self {
+        Self {
+            size,
+            created,
+            modified,
+            accessed,
+            permissions,
+            file_type,
+            platform_specific,
+        }
     }
 }
 
