@@ -280,6 +280,77 @@ impl Default for FileSystemStats {
     }
 }
 
+/// Trait for collecting filesystem operation statistics.
+pub trait StatsCollector: Send + Sync {
+    /// Records metrics for a completed operation.
+    fn record_operation(&self, metrics: OperationMetrics);
+    
+    /// Gets a reference to the current statistics.
+    fn get_stats(&self) -> &FileSystemStats;
+    
+    /// Resets all statistics to zero.
+    fn reset_stats(&self);
+}
+
+/// Default implementation of StatsCollector.
+pub struct DefaultStatsCollector {
+    stats: FileSystemStats,
+}
+
+impl DefaultStatsCollector {
+    /// Creates a new stats collector.
+    pub fn new() -> Self {
+        Self {
+            stats: FileSystemStats::new(),
+        }
+    }
+}
+
+impl Default for DefaultStatsCollector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl StatsCollector for DefaultStatsCollector {
+    fn record_operation(&self, metrics: OperationMetrics) {
+        // Increment operation count
+        self.stats.increment_operation(metrics.operation);
+        
+        // Update byte counters if applicable
+        if let Some(bytes) = metrics.bytes_transferred {
+            match metrics.operation {
+                OperationType::Read => self.stats.add_bytes_read(bytes as u64),
+                OperationType::Write => self.stats.add_bytes_written(bytes as u64),
+                _ => {}
+            }
+        }
+        
+        // Update cache statistics
+        if metrics.cache_hit {
+            self.stats.increment_cache_hits();
+        } else if matches!(metrics.operation, OperationType::Read | OperationType::Stat) {
+            // Only count cache misses for operations that could have cache hits
+            self.stats.increment_cache_misses();
+        }
+        
+        // Track active handles
+        match metrics.operation {
+            OperationType::Open => self.stats.increment_active_handles(),
+            OperationType::Close => self.stats.decrement_active_handles(),
+            _ => {}
+        }
+    }
+    
+    fn get_stats(&self) -> &FileSystemStats {
+        &self.stats
+    }
+    
+    fn reset_stats(&self) {
+        self.stats.reset();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -482,5 +553,137 @@ mod tests {
         assert!(metrics.bytes_transferred.is_none());
         assert!(!metrics.cache_hit);
         assert_eq!(metrics.error, Some("File not found".to_string()));
+    }
+    
+    #[test]
+    fn test_default_stats_collector() {
+        let collector = DefaultStatsCollector::new();
+        
+        // Record a successful read operation
+        collector.record_operation(OperationMetrics::success(
+            OperationType::Read,
+            ShadowPath::from("/test/file.txt"),
+            Duration::from_millis(10),
+            Some(1024),
+            true,
+        ));
+        
+        // Record a successful write operation
+        collector.record_operation(OperationMetrics::success(
+            OperationType::Write,
+            ShadowPath::from("/test/file.txt"),
+            Duration::from_millis(20),
+            Some(512),
+            false,
+        ));
+        
+        // Record open and close operations
+        collector.record_operation(OperationMetrics::success(
+            OperationType::Open,
+            ShadowPath::from("/test/file.txt"),
+            Duration::from_millis(5),
+            None,
+            false,
+        ));
+        
+        collector.record_operation(OperationMetrics::success(
+            OperationType::Close,
+            ShadowPath::from("/test/file.txt"),
+            Duration::from_millis(2),
+            None,
+            false,
+        ));
+        
+        let stats = collector.get_stats();
+        assert_eq!(stats.get_operation_count(OperationType::Read), 1);
+        assert_eq!(stats.get_operation_count(OperationType::Write), 1);
+        assert_eq!(stats.get_operation_count(OperationType::Open), 1);
+        assert_eq!(stats.get_operation_count(OperationType::Close), 1);
+        assert_eq!(stats.bytes_read.load(Ordering::Relaxed), 1024);
+        assert_eq!(stats.bytes_written.load(Ordering::Relaxed), 512);
+        assert_eq!(stats.cache_hits.load(Ordering::Relaxed), 1);
+        assert_eq!(stats.cache_misses.load(Ordering::Relaxed), 0); // Write doesn't count as miss
+        assert_eq!(stats.active_handles.load(Ordering::Relaxed), 0); // Open then close
+        
+        // Test reset
+        collector.reset_stats();
+        assert_eq!(stats.get_operation_count(OperationType::Read), 0);
+        assert_eq!(stats.bytes_read.load(Ordering::Relaxed), 0);
+    }
+    
+    #[test]
+    fn test_stats_collector_cache_behavior() {
+        let collector = DefaultStatsCollector::new();
+        
+        // Read with cache hit
+        collector.record_operation(OperationMetrics::success(
+            OperationType::Read,
+            ShadowPath::from("/cached.txt"),
+            Duration::from_millis(1),
+            Some(100),
+            true,
+        ));
+        
+        // Read with cache miss
+        collector.record_operation(OperationMetrics::success(
+            OperationType::Read,
+            ShadowPath::from("/uncached.txt"),
+            Duration::from_millis(10),
+            Some(200),
+            false,
+        ));
+        
+        // Stat with cache hit
+        collector.record_operation(OperationMetrics::success(
+            OperationType::Stat,
+            ShadowPath::from("/file.txt"),
+            Duration::from_millis(1),
+            None,
+            true,
+        ));
+        
+        // Stat with cache miss
+        collector.record_operation(OperationMetrics::success(
+            OperationType::Stat,
+            ShadowPath::from("/other.txt"),
+            Duration::from_millis(5),
+            None,
+            false,
+        ));
+        
+        let stats = collector.get_stats();
+        assert_eq!(stats.cache_hits.load(Ordering::Relaxed), 2);
+        assert_eq!(stats.cache_misses.load(Ordering::Relaxed), 2);
+        assert_eq!(stats.cache_hit_rate(), 50.0);
+    }
+    
+    #[test]
+    fn test_stats_collector_handle_tracking() {
+        let collector = DefaultStatsCollector::new();
+        
+        // Open multiple files
+        for i in 0..3 {
+            collector.record_operation(OperationMetrics::success(
+                OperationType::Open,
+                ShadowPath::from(format!("/file{}.txt", i)),
+                Duration::from_millis(1),
+                None,
+                false,
+            ));
+        }
+        
+        let stats = collector.get_stats();
+        assert_eq!(stats.active_handles.load(Ordering::Relaxed), 3);
+        
+        // Close one file
+        collector.record_operation(OperationMetrics::success(
+            OperationType::Close,
+            ShadowPath::from("/file0.txt"),
+            Duration::from_millis(1),
+            None,
+            false,
+        ));
+        
+        assert_eq!(stats.active_handles.load(Ordering::Relaxed), 2);
     }
 }
