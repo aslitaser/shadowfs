@@ -12,4 +12,4 @@ pub use metadata::{FileType, FilePermissions, PlatformMetadata, FileMetadata};
 pub use operations::{FileHandle, OpenFlags, Bytes, FileOperation};
 pub use directory::DirectoryEntry;
 pub use error::{ShadowError, OperationResult};
-pub use mount::{MountOptions, MountOptionsBuilder, CacheConfig, OverrideConfig};
+pub use mount::{MountOptions, MountOptionsBuilder, CacheConfig, OverrideConfig, MountHandle, Platform};
