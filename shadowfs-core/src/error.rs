@@ -64,7 +64,7 @@ pub enum ShadowError {
     },
 
     /// I/O error from the underlying system.
-    #[error("I/O error")]
+    #[error("I/O error: {source}")]
     IoError {
         #[source]
         source: std::io::Error,
@@ -174,6 +174,129 @@ impl From<std::io::Error> for ShadowError {
 
 /// Result type alias for ShadowFS operations.
 pub type Result<T> = std::result::Result<T, ShadowError>;
+
+/// Trait for adding context to errors.
+/// 
+/// This trait provides methods to add additional context to errors,
+/// making it easier to understand where and why an error occurred.
+pub trait ErrorContext<T> {
+    /// Adds context to an error.
+    /// 
+    /// # Example
+    /// ```ignore
+    /// use shadowfs_core::error::{ErrorContext, Result};
+    /// 
+    /// fn read_config() -> Result<String> {
+    ///     std::fs::read_to_string("/etc/shadowfs.conf")
+    ///         .context("Failed to read configuration file")
+    /// }
+    /// ```
+    fn context<C>(self, context: C) -> Result<T>
+    where
+        C: fmt::Display + Send + Sync + 'static;
+
+    /// Adds context to an error with a closure.
+    /// 
+    /// The closure is only evaluated if an error occurs, which can be useful
+    /// for expensive context generation.
+    /// 
+    /// # Example
+    /// ```ignore
+    /// use shadowfs_core::error::{ErrorContext, Result};
+    /// 
+    /// fn process_file(path: &str) -> Result<()> {
+    ///     std::fs::read(path)
+    ///         .with_context(|| format!("Failed to process file: {}", path))?;
+    ///     Ok(())
+    /// }
+    /// ```
+    fn with_context<C, F>(self, f: F) -> Result<T>
+    where
+        C: fmt::Display + Send + Sync + 'static,
+        F: FnOnce() -> C;
+}
+
+impl<T> ErrorContext<T> for Result<T> {
+    fn context<C>(self, context: C) -> Result<T>
+    where
+        C: fmt::Display + Send + Sync + 'static,
+    {
+        self.map_err(|err| {
+            match err {
+                ShadowError::IoError { source } => {
+                    let new_source = std::io::Error::new(
+                        source.kind(),
+                        format!("{}: {}", context, source)
+                    );
+                    ShadowError::IoError { source: new_source }
+                }
+                _ => {
+                    let io_err = std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        format!("{}: {}", context, err)
+                    );
+                    ShadowError::IoError { source: io_err }
+                }
+            }
+        })
+    }
+
+    fn with_context<C, F>(self, f: F) -> Result<T>
+    where
+        C: fmt::Display + Send + Sync + 'static,
+        F: FnOnce() -> C,
+    {
+        self.map_err(|err| {
+            let context = f();
+            match err {
+                ShadowError::IoError { source } => {
+                    let new_source = std::io::Error::new(
+                        source.kind(),
+                        format!("{}: {}", context, source)
+                    );
+                    ShadowError::IoError { source: new_source }
+                }
+                _ => {
+                    let io_err = std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        format!("{}: {}", context, err)
+                    );
+                    ShadowError::IoError { source: io_err }
+                }
+            }
+        })
+    }
+}
+
+impl<T> ErrorContext<T> for std::io::Result<T> {
+    fn context<C>(self, context: C) -> Result<T>
+    where
+        C: fmt::Display + Send + Sync + 'static,
+    {
+        self.map_err(|err| {
+            let io_err = std::io::Error::new(
+                err.kind(),
+                format!("{}: {}", context, err)
+            );
+            ShadowError::IoError { source: io_err }
+        })
+    }
+
+    fn with_context<C, F>(self, f: F) -> Result<T>
+    where
+        C: fmt::Display + Send + Sync + 'static,
+        F: FnOnce() -> C,
+    {
+        self.map_err(|err| {
+            let context = f();
+            let io_err = std::io::Error::new(
+                err.kind(),
+                format!("{}: {}", context, err)
+            );
+            ShadowError::IoError { source: io_err }
+        })
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -306,5 +429,77 @@ mod tests {
         assert_eq!(Platform::Windows.to_string(), "Windows");
         assert_eq!(Platform::MacOS.to_string(), "macOS");
         assert_eq!(Platform::Linux.to_string(), "Linux");
+    }
+
+    #[test]
+    fn test_error_context() {
+        // Test context on io::Error
+        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file.txt");
+        let result: std::result::Result<(), _> = Err(io_err);
+        let shadow_result = result.context("Failed to open configuration");
+        
+        assert!(shadow_result.is_err());
+        let err = shadow_result.unwrap_err();
+        assert!(matches!(err, ShadowError::IoError { .. }));
+        assert!(err.to_string().contains("Failed to open configuration"));
+    }
+
+    #[test]
+    fn test_error_with_context() {
+        // Test with_context on io::Error
+        let io_err = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "access denied");
+        let result: std::result::Result<(), _> = Err(io_err);
+        let path = "/etc/shadowfs.conf";
+        let shadow_result = result.with_context(|| format!("Cannot read file: {}", path));
+        
+        assert!(shadow_result.is_err());
+        let err = shadow_result.unwrap_err();
+        assert!(matches!(err, ShadowError::IoError { .. }));
+        assert!(err.to_string().contains("Cannot read file: /etc/shadowfs.conf"));
+    }
+
+    #[test]
+    fn test_shadow_error_context() {
+        // Test context on ShadowError
+        let path = ShadowPath::from("/test/file.txt");
+        let result: Result<()> = Err(ShadowError::NotFound { path });
+        let contextualized = result.context("While processing user request");
+        
+        assert!(contextualized.is_err());
+        let err = contextualized.unwrap_err();
+        assert!(matches!(err, ShadowError::IoError { .. }));
+        assert!(err.to_string().contains("While processing user request"));
+    }
+
+    #[test]
+    fn test_shadow_error_with_context_io_error() {
+        // Test with_context on ShadowError::IoError preserves error kind
+        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "original error");
+        let result: Result<()> = Err(ShadowError::IoError { source: io_err });
+        let contextualized = result.with_context(|| "Additional context");
+        
+        assert!(contextualized.is_err());
+        if let Err(ShadowError::IoError { source }) = contextualized {
+            assert_eq!(source.kind(), std::io::ErrorKind::NotFound);
+            assert!(source.to_string().contains("Additional context"));
+            assert!(source.to_string().contains("original error"));
+        } else {
+            panic!("Expected IoError variant");
+        }
+    }
+
+    #[test]
+    fn test_context_chain() {
+        // Test chaining multiple contexts
+        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "base error");
+        let result: std::result::Result<(), _> = Err(io_err);
+        let contextualized = result
+            .context("First context")
+            .context("Second context");
+        
+        assert!(contextualized.is_err());
+        let err_string = contextualized.unwrap_err().to_string();
+        assert!(err_string.contains("Second context"));
+        assert!(err_string.contains("First context"));
     }
 }
