@@ -94,7 +94,7 @@ fn detect_platform() -> &'static str {
     return "Unsupported";
 }
 
-async fn mount_filesystem(source: &str, mount: &str) -> Result<()> {
+async fn mount_filesystem(_source: &str, _mount: &str) -> Result<()> {
     #[cfg(windows)]
     {
         // TODO: Implement Windows ProjFS mounting
@@ -117,7 +117,7 @@ async fn mount_filesystem(source: &str, mount: &str) -> Result<()> {
     anyhow::bail!("Platform not supported");
 }
 
-async fn unmount_filesystem(mount: &str) -> Result<()> {
+async fn unmount_filesystem(_mount: &str) -> Result<()> {
     // TODO: Implement unmounting for each platform
     anyhow::bail!("Unmounting not yet implemented");
 }
@@ -128,7 +128,7 @@ async fn show_status() -> Result<()> {
     Ok(())
 }
 
-async fn test_filesystem(mount: &str) -> Result<()> {
+async fn test_filesystem(_mount: &str) -> Result<()> {
     // TODO: Implement filesystem tests
     anyhow::bail!("Testing not yet implemented");
 }
