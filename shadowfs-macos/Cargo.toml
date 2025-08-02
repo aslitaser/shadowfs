@@ -8,7 +8,7 @@ repository.workspace = true
 
 [dependencies]
 objc = "0.2"
-core-foundation = "0.9"
+core-foundation = "0.10"
 shadowfs-core = { path = "../shadowfs-core" }
 tokio.workspace = true
 tracing.workspace = true
