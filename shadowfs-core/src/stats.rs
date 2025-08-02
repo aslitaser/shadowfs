@@ -360,4 +360,17 @@ mod tests {
         assert_eq!(stats.active_handles.load(Ordering::Relaxed), 0);
         assert_eq!(stats.get_operation_count(OperationType::Read), 0);
     }
+    
+    #[test]
+    fn test_operation_type_names() {
+        assert_eq!(OperationType::Open.name(), "open");
+        assert_eq!(OperationType::Read.name(), "read");
+        assert_eq!(OperationType::Write.name(), "write");
+        assert_eq!(OperationType::Close.name(), "close");
+        assert_eq!(OperationType::Stat.name(), "stat");
+        assert_eq!(OperationType::ReadDir.name(), "readdir");
+        assert_eq!(OperationType::Create.name(), "create");
+        assert_eq!(OperationType::Delete.name(), "delete");
+        assert_eq!(OperationType::Rename.name(), "rename");
+    }
 }
