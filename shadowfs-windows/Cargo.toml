@@ -1,0 +1,14 @@
+[package]
+name = "shadowfs-windows"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+windows = { version = "0.48", features = ["Win32_Storage_ProjectedFileSystem", "Win32_Foundation", "Win32_Security"] }
+shadowfs-core = { path = "../shadowfs-core" }
+tokio.workspace = true
+tracing.workspace = true
+thiserror.workspace = true

@@ -1,0 +1,15 @@
+[package]
+name = "shadowfs-macos"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+objc = "0.2"
+core-foundation = "0.9"
+shadowfs-core = { path = "../shadowfs-core" }
+tokio.workspace = true
+tracing.workspace = true
+thiserror.workspace = true
