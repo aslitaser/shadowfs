@@ -15,7 +15,7 @@ pub enum FileType {
 
 /// Represents file permissions in a platform-agnostic way.
 /// Abstracts Unix permissions (rwx) and Windows ACLs.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct FilePermissions {
     /// Whether the file is read-only
     pub readonly: bool,
