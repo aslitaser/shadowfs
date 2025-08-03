@@ -13,9 +13,6 @@ use crate::types::mount::Platform;
 #[cfg(windows)]
 use std::os::windows::ffi::OsStrExt;
 
-#[cfg(unix)]
-use std::os::unix::ffi::OsStrExt;
-
 /// Windows file attributes
 #[derive(Debug, Clone, Copy)]
 pub struct WindowsAttributes {
