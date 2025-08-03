@@ -8,7 +8,7 @@ use tokio::sync::oneshot;
 use crate::types::{FilePermissions, ShadowPath};
 
 /// Represents the platform where the filesystem is mounted.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Platform {
     Windows,
     MacOS,
