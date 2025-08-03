@@ -386,3 +386,57 @@ impl MacOSDetector {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_code_sign_status() {
+        let detector = MacOSDetector::new();
+        let status = detector.get_code_signing_status();
+        // Just verify it returns a valid status
+        assert!(matches!(
+            status,
+            CodeSignStatus::Valid | CodeSignStatus::Invalid | CodeSignStatus::NotSigned | CodeSignStatus::Unknown
+        ));
+    }
+
+    #[test]
+    fn test_architecture_detection() {
+        let detector = MacOSDetector::new();
+        let arch = detector.detect_architecture();
+        assert!(matches!(
+            arch,
+            Architecture::X64 | Architecture::Arm64 | Architecture::Unknown
+        ));
+    }
+
+    #[test]
+    fn test_version_parsing() {
+        let detector = MacOSDetector::new();
+        
+        // Test standard version format
+        let version = detector.parse_version("14.0").unwrap();
+        assert_eq!(version.major, 14);
+        assert_eq!(version.minor, 0);
+        assert_eq!(version.patch, 0);
+        
+        // Test full version format
+        let version = detector.parse_version("14.2.1").unwrap();
+        assert_eq!(version.major, 14);
+        assert_eq!(version.minor, 2);
+        assert_eq!(version.patch, 1);
+    }
+
+    #[test]
+    fn test_macfuse_version_parsing() {
+        let detector = MacOSDetector::new();
+        
+        let output = "macFUSE 4.4.0";
+        let version = detector.parse_macfuse_version(output).unwrap();
+        assert_eq!(version.major, 4);
+        assert_eq!(version.minor, 4);
+        assert_eq!(version.patch, 0);
+    }
+}
