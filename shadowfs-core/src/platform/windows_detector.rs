@@ -404,3 +404,40 @@ if ($?) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_architecture_detection() {
+        let detector = WindowsDetector::new();
+        let arch = detector.detect_architecture();
+        assert!(matches!(
+            arch,
+            Architecture::X64 | Architecture::Arm64 | Architecture::Unknown
+        ));
+    }
+
+    #[test]
+    fn test_max_path_length() {
+        let detector = WindowsDetector::new();
+        let max_path = detector.get_max_path_length();
+        assert!(max_path == 260 || max_path == 32767);
+    }
+
+    #[test]
+    #[cfg(target_os = "windows")]
+    fn test_is_admin() {
+        let detector = WindowsDetector::new();
+        // Just verify it returns a boolean without error
+        let _ = detector.is_admin();
+    }
+
+    #[test]
+    #[cfg(not(target_os = "windows"))]
+    fn test_is_admin_on_non_windows() {
+        let detector = WindowsDetector::new();
+        assert!(!detector.is_admin());
+    }
+}
