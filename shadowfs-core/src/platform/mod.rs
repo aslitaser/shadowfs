@@ -5,8 +5,10 @@ mod linux_detector;
 mod install_helper;
 mod capability_test;
 mod compatibility;
+mod runtime_detection;
 
 pub use detector::*;
 pub use install_helper::*;
 pub use capability_test::*;
 pub use compatibility::*;
+pub use runtime_detection::*;
