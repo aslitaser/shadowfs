@@ -96,6 +96,12 @@ pub enum ShadowError {
     Unsupported { 
         feature: String 
     },
+
+    /// Invalid configuration.
+    #[error("Invalid configuration: {message}")]
+    InvalidConfiguration { 
+        message: String 
+    },
 }
 
 impl ShadowError {

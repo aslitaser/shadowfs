@@ -1,5 +1,39 @@
-//! In-memory storage for file and directory overrides.
+//! High-performance in-memory storage for file and directory overrides.
+//! 
+//! The override store provides efficient caching and management of file system
+//! overrides with advanced features like compression, deduplication, pattern
+//! matching, and copy-on-write semantics.
+//! 
+//! # Quick Start
+//! 
+//! ```rust
+//! use shadowfs_core::override_store::{OverrideStoreBuilder, EvictionPolicy, OverrideStore};
+//! 
+//! // Create a basic store
+//! let store = OverrideStoreBuilder::new()
+//!     .with_memory_limit(64 * 1024 * 1024) // 64MB
+//!     .build()
+//!     .expect("Failed to create store");
+//! 
+//! // Or use defaults
+//! let store = OverrideStore::with_defaults();
+//! ```
+//! 
+//! # Key Features
+//! 
+//! - **Memory Management**: Automatic eviction with configurable policies
+//! - **Performance**: BLAKE3 content deduplication and LRU caching
+//! - **Compression**: Transparent zstd compression for large files
+//! - **Patterns**: Advanced pattern matching with transformations
+//! - **Persistence**: Snapshot and WAL support for durability
+//! - **Statistics**: Comprehensive monitoring and health checks
+//! 
+//! # Thread Safety
+//! 
+//! All operations are thread-safe. The store uses lock-free data structures
+//! where possible and fine-grained locking elsewhere to maximize concurrency.
 
+// Internal modules (private)
 mod entry;
 mod memory;
 mod lru;
@@ -9,29 +43,40 @@ mod persistence;
 mod optimization;
 mod stats;
 mod patterns;
+mod api;
 
+// Public API exports
+pub use api::{
+    OverrideStoreBuilder, HealthStatus, ExportFormat, Migration
+};
+
+// Core types (public)
+// OverrideStore and OverrideStoreConfig are defined below
 pub use entry::{OverrideEntry, OverrideContent};
-pub use memory::{MemoryTracker, MemoryGuard};
-pub use lru::{LruTracker, AccessStats, EvictionPolicy};
-pub use size::{calculate_bytes_size, calculate_entry_size};
-pub use directory::{DirectoryCache, PathTraversal};
-pub use persistence::{
-    OverridePersistence, PersistenceOp, OverrideSnapshot, 
-    PersistenceConfig, FileBasedPersistence
-};
-pub use optimization::{
-    ContentDeduplication, ReadThroughCache, PrefetchStrategy, 
-    DirectoryPrefetcher, ShardedMap, hash_content, compression
-};
+pub use lru::EvictionPolicy;
+pub use optimization::PrefetchStrategy;
 pub use stats::{
     OverrideStoreStats, StatsSnapshot, MemoryBreakdown, StatsReport,
-    PerformanceMetrics, EfficiencyMetrics, AlertConfig, HotPathStats, EntryType
+    PerformanceMetrics, EfficiencyMetrics, AlertConfig, HotPathStats
 };
+
+// Pattern matching (public)
 pub use patterns::{
     OverrideRule, RuleSet, RulePriority, TransformChain, TransformFn, transforms,
     OverrideCondition, OverrideTemplate, CowContent, ContentLoader, OverrideRuleEntry,
-    OverrideContentType, TransformError, TemplateError, CowError, ResolveError
+    OverrideContentType
 };
+
+// Advanced features (public but less common)
+pub use persistence::{OverrideSnapshot, PersistenceConfig};
+pub use optimization::{ContentDeduplication, compression};
+
+// Internal utilities (kept private)
+use memory::MemoryTracker;
+use lru::LruTracker;
+use size::calculate_entry_size;
+use directory::{DirectoryCache, PathTraversal};
+use optimization::{ReadThroughCache, DirectoryPrefetcher, ShardedMap};
 
 use crate::types::{FileMetadata, ShadowPath, DirectoryEntry};
 use crate::error::ShadowError;

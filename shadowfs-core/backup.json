@@ -1,0 +1,15 @@
+{
+  "config": {
+    "max_memory": 67108864,
+    "eviction_policy": "Lru",
+    "enable_memory_pressure": true,
+    "eviction_threshold": 0.9,
+    "cache_size": 1000,
+    "prefetch_strategy": "Children",
+    "enable_compression": true
+  },
+  "entries": {},
+  "directory_children": {},
+  "timestamp": 1754178948,
+  "checksum": 5285932188853429152
+}
