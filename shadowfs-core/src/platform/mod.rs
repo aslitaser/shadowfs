@@ -6,6 +6,7 @@ pub mod install;
 mod capability_test;
 mod compatibility;
 pub mod runtime;
+pub mod cli;
 
 pub use detector::*;
 pub use install::*;
