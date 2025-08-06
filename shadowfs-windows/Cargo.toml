@@ -7,8 +7,18 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-windows = { version = "0.48", features = ["Win32_Storage_ProjectedFileSystem", "Win32_Foundation", "Win32_Security"] }
+windows = { version = "0.48", features = [
+    "Win32_Storage_ProjectedFileSystem", 
+    "Win32_Foundation", 
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_WindowsProgramming"
+] }
 shadowfs-core = { path = "../shadowfs-core" }
 tokio.workspace = true
 tracing.workspace = true
 thiserror.workspace = true
+parking_lot = "0.12"
+dashmap = "5.5"
+num_cpus = "1.16"
+log = "0.4"
