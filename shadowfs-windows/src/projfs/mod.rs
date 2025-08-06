@@ -1,5 +1,6 @@
 pub mod provider;
 pub mod callbacks;
+pub mod virtualization;
 
 pub use provider::{ProjFSProvider, ProjFSConfig, ProjFSHandle};
 pub use callbacks::{
@@ -10,3 +11,4 @@ pub use callbacks::{
     get_placeholder_info_callback,
     get_file_data_callback,
 };
+pub use virtualization::VirtualizationRoot;
