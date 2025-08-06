@@ -12,7 +12,8 @@ windows = { version = "0.48", features = [
     "Win32_Foundation", 
     "Win32_Security",
     "Win32_Storage_FileSystem",
-    "Win32_System_WindowsProgramming"
+    "Win32_System_WindowsProgramming",
+    "Win32_System_SystemInformation"
 ] }
 shadowfs-core = { path = "../shadowfs-core" }
 tokio.workspace = true
@@ -22,3 +23,7 @@ parking_lot = "0.12"
 dashmap = "5.5"
 num_cpus = "1.16"
 log = "0.4"
+bytes = "1.8"
+
+[dev-dependencies]
+tempfile = "3.8"
