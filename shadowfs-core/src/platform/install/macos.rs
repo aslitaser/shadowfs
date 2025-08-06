@@ -294,7 +294,7 @@ You may also need to:
         }
     }
     
-    fn execute_with_progress(&self, _progress_callback: &dyn Fn(&InstallProgress)) -> Result<(), String> {
+    fn execute_with_progress(&self, progress_callback: &dyn Fn(&InstallProgress)) -> Result<(), String> {
         let steps = if self.use_macfuse { 5 } else { 3 };
         let mut progress = InstallProgress::new(steps);
         

@@ -335,7 +335,7 @@ Note: This will remove FUSE for all applications, not just ShadowFS.
 "#, self.get_package_manager(), self.get_fuse_package_name())
     }
     
-    fn execute_with_progress(&self, _progress_callback: &dyn Fn(&InstallProgress)) -> Result<(), String> {
+    fn execute_with_progress(&self, progress_callback: &dyn Fn(&InstallProgress)) -> Result<(), String> {
         let mut progress = InstallProgress::new(5);
         
         progress.advance("Checking prerequisites");

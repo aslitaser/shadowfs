@@ -23,7 +23,6 @@ pub use interactive::{InteractiveInstaller, PlatformInstallHelper};
 /// Get the appropriate install helper for the current platform
 pub fn get_platform_installer() -> PlatformInstallHelper {
     use crate::types::mount::Platform;
-    use crate::traits::PlatformExt;
     
     match Platform::current() {
         Platform::Windows => PlatformInstallHelper::Windows(WindowsInstallHelper::new()),
@@ -37,7 +36,6 @@ mod tests {
     use super::*;
     use std::time::Duration;
     use crate::types::mount::Platform;
-    use crate::traits::PlatformExt;
     
     #[test]
     fn test_prerequisite_builder() {

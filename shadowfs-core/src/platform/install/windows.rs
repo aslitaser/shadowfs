@@ -210,7 +210,7 @@ Note: This will disable ProjFS for all applications, not just ShadowFS.
 "#.to_string()
     }
     
-    fn execute_with_progress(&self, _progress_callback: &dyn Fn(&InstallProgress)) -> Result<(), String> {
+    fn execute_with_progress(&self, progress_callback: &dyn Fn(&InstallProgress)) -> Result<(), String> {
         let mut progress = InstallProgress::new(4);
         
         // Step 1: Check prerequisites
