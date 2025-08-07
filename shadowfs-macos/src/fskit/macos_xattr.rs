@@ -209,6 +209,17 @@ pub struct MacOSXattrHandler {
     handlers: HashMap<OsString, Box<dyn Fn(&[u8]) -> io::Result<Vec<u8>> + Send + Sync>>,
 }
 
+impl std::fmt::Debug for MacOSXattrHandler {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MacOSXattrHandler")
+            .field("preserve_quarantine", &self.preserve_quarantine)
+            .field("preserve_resource_forks", &self.preserve_resource_forks)
+            .field("filter_system_attrs", &self.filter_system_attrs)
+            .field("handlers_count", &self.handlers.len())
+            .finish()
+    }
+}
+
 impl MacOSXattrHandler {
     pub fn new() -> Self {
         Self {
