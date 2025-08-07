@@ -18,3 +18,7 @@ tracing.workspace = true
 thiserror.workspace = true
 libc = "0.2"
 errno = "0.3"
+dispatch = "0.2"
+dashmap = "5.5"
+uuid = { version = "1.6", features = ["v4"] }
+tempfile = "3.8"
