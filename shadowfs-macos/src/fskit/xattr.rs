@@ -96,16 +96,18 @@ impl ExtendedAttributesHandler {
             deleted.remove(&name);
         }
         
-        let attrs = self.override_attributes.entry(path_buf.clone()).or_insert_with(HashMap::new);
+        let has_attr = self.override_attributes.get(&path_buf)
+            .map(|attrs| attrs.contains_key(&name))
+            .unwrap_or(false);
         
-        if flags.create && attrs.contains_key(&name) {
+        if flags.create && has_attr {
             return Err(io::Error::new(
                 io::ErrorKind::AlreadyExists,
                 "Extended attribute already exists"
             ));
         }
         
-        if flags.replace && !attrs.contains_key(&name) {
+        if flags.replace && !has_attr {
             let has_source = self.get_source_xattr(path, &name)?.is_some();
             if !has_source {
                 return Err(io::Error::new(
@@ -115,6 +117,7 @@ impl ExtendedAttributesHandler {
             }
         }
         
+        let attrs = self.override_attributes.entry(path_buf).or_insert_with(HashMap::new);
         attrs.insert(name, value);
         Ok(())
     }
