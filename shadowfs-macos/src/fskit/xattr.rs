@@ -39,6 +39,7 @@ pub enum ConflictResolution {
     Merge,
 }
 
+#[derive(Debug)]
 pub struct ExtendedAttributesHandler {
     conflict_resolution: ConflictResolution,
     override_attributes: HashMap<PathBuf, HashMap<OsString, Vec<u8>>>,
@@ -121,12 +122,35 @@ impl ExtendedAttributesHandler {
             return Ok(None);
         }
         
-        if let Some(deleted) = self.deleted_attributes.get(path) {
-            if deleted.contains(name) {
-                return Ok(None);
+        // Check cache first
+        if let Some(ref cache) = self.cache {
+            if let Some(cached_value) = cache.get(path, &name.to_os_string()) {
+                return Ok(cached_value);
             }
         }
         
+        // Not in cache, compute the value
+        let result = if let Some(deleted) = self.deleted_attributes.get(path) {
+            if deleted.contains(name) {
+                Ok(None)
+            } else {
+                self.get_xattr_uncached(path, name)
+            }
+        } else {
+            self.get_xattr_uncached(path, name)
+        };
+        
+        // Store in cache
+        if let Ok(ref value) = result {
+            if let Some(ref cache) = self.cache {
+                cache.put(path, name.to_os_string(), value.clone());
+            }
+        }
+        
+        result
+    }
+    
+    fn get_xattr_uncached(&self, path: &Path, name: &OsStr) -> io::Result<Option<Vec<u8>>> {
         if let Some(override_attrs) = self.override_attributes.get(path) {
             if let Some(value) = override_attrs.get(name) {
                 return self.macos_handler.process_xattr(name, value);
@@ -169,7 +193,13 @@ impl ExtendedAttributesHandler {
         }
         
         let attrs = self.override_attributes.entry(path_buf).or_insert_with(HashMap::new);
-        attrs.insert(name, value);
+        attrs.insert(name.clone(), value);
+        
+        // Invalidate cache for this attribute
+        if let Some(ref cache) = self.cache {
+            cache.invalidate_attr(path, &name);
+        }
+        
         Ok(())
     }
 
@@ -193,6 +223,11 @@ impl ExtendedAttributesHandler {
                 io::ErrorKind::NotFound,
                 "Extended attribute not found"
             ));
+        }
+        
+        // Invalidate cache for this attribute
+        if let Some(ref cache) = self.cache {
+            cache.invalidate_attr(path, &name);
         }
         
         Ok(())
@@ -443,6 +478,26 @@ impl ExtendedAttributesHandler {
     
     pub fn identify_xattr_type(&self, name: &OsStr) -> MacOSXattrType {
         MacOSXattrHandler::identify_xattr_type(name)
+    }
+    
+    pub fn get_cache_stats(&self) -> Option<CacheStats> {
+        self.cache.as_ref().map(|c| c.stats())
+    }
+    
+    pub fn get_cache_hit_rate(&self) -> Option<f64> {
+        self.cache.as_ref().map(|c| c.hit_rate())
+    }
+    
+    pub fn clear_cache(&self) {
+        if let Some(ref cache) = self.cache {
+            cache.clear();
+        }
+    }
+    
+    pub fn prune_cache(&self) {
+        if let Some(ref cache) = self.cache {
+            cache.prune_expired();
+        }
     }
 }
 
