@@ -11,6 +11,7 @@ use windows::core::Result;
 use windows::Win32::Storage::ProjectedFileSystem::*;
 
 use crate::error::WindowsError;
+use super::performance::PerformanceMonitor;
 
 const DEFAULT_WORKER_THREADS: usize = 4;
 const DEFAULT_QUEUE_SIZE: usize = 1000;
@@ -38,7 +39,7 @@ impl TaskPriority {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum CallbackRequest {
     GetPlaceholderInfo {
         callback_data: PRJ_CALLBACK_DATA,
@@ -205,6 +206,7 @@ pub struct AsyncBridge {
     metrics: Arc<Mutex<BridgeMetrics>>,
     shutdown_token: CancellationToken,
     is_running: Arc<AtomicBool>,
+    performance_monitor: Arc<PerformanceMonitor>,
 }
 
 #[derive(Debug, Default, Clone)]
@@ -240,6 +242,10 @@ impl AsyncBridge {
         let metrics = Arc::new(Mutex::new(BridgeMetrics::default()));
         let shutdown_token = CancellationToken::new();
         let is_running = Arc::new(AtomicBool::new(true));
+        let performance_monitor = Arc::new(PerformanceMonitor::new(worker_threads));
+
+        // Start performance monitoring
+        performance_monitor.clone().start_monitoring();
 
         let mut worker_handles = Vec::with_capacity(worker_threads);
 
@@ -250,6 +256,7 @@ impl AsyncBridge {
             let queue = priority_queue.clone();
             let shutdown = shutdown_token.clone();
             let running = is_running.clone();
+            let perf_monitor = performance_monitor.clone();
             
             let worker_handle = thread::Builder::new()
                 .name(format!("shadowfs-async-bridge-worker-{}", i))
@@ -263,10 +270,14 @@ impl AsyncBridge {
                                 }
                                 _ = tokio::time::sleep(tokio::time::Duration::from_millis(10)) => {
                                     if let Some(task) = queue.pop().await {
+                                        perf_monitor.record_thread_active();
+                                        perf_monitor.record_dequeue(task.priority, task.sequence);
+                                        
                                         if task.cancellation_token.is_cancelled() {
                                             let mut m = metrics.lock().unwrap();
                                             m.cancelled_requests += 1;
                                             queue.remove_active(task.sequence).await;
+                                            perf_monitor.record_thread_idle();
                                             continue;
                                         }
 
@@ -274,12 +285,15 @@ impl AsyncBridge {
                                             Ok(permit) => permit,
                                             Err(_) => {
                                                 warn!("Backpressure limit reached, waiting for permit");
+                                                perf_monitor.record_backpressure();
                                                 match sem.acquire().await {
                                                     Ok(permit) => permit,
                                                     Err(e) => {
                                                         error!("Failed to acquire semaphore permit: {}", e);
                                                         Self::handle_error_response(&task.request);
                                                         queue.remove_active(task.sequence).await;
+                                                        perf_monitor.record_error();
+                                                        perf_monitor.record_thread_idle();
                                                         continue;
                                                     }
                                                 }
@@ -290,6 +304,7 @@ impl AsyncBridge {
                                         if elapsed > std::time::Duration::from_secs(5) {
                                             warn!("Task waited {} ms before processing (priority: {:?})", 
                                                   elapsed.as_millis(), task.priority);
+                                            perf_monitor.record_timeout();
                                         }
 
                                         {
@@ -297,9 +312,14 @@ impl AsyncBridge {
                                             m.priority_stats[task.priority as usize] += 1;
                                         }
 
-                                        Self::process_request(task.request, &metrics).await;
+                                        let task_start = std::time::Instant::now();
+                                        Self::process_request(task.request, &metrics, &perf_monitor).await;
+                                        let task_duration = task_start.elapsed();
+                                        
+                                        perf_monitor.record_task_complete(task_duration, true);
                                         queue.remove_active(task.sequence).await;
                                         drop(permit);
+                                        perf_monitor.record_thread_idle();
                                     }
                                 }
                             }
@@ -337,11 +357,28 @@ impl AsyncBridge {
             metrics,
             shutdown_token,
             is_running,
+            performance_monitor,
         })
     }
 
-    async fn process_request(request: CallbackRequest, metrics: &Arc<Mutex<BridgeMetrics>>) {
+    async fn process_request(
+        request: CallbackRequest, 
+        metrics: &Arc<Mutex<BridgeMetrics>>,
+        perf_monitor: &Arc<PerformanceMonitor>,
+    ) {
         debug!("Processing async request: {:?}", std::mem::discriminant(&request));
+        
+        let operation_name = match &request {
+            CallbackRequest::GetPlaceholderInfo { .. } => "GetPlaceholderInfo",
+            CallbackRequest::GetFileData { .. } => "GetFileData",
+            CallbackRequest::QueryFileName { .. } => "QueryFileName",
+            CallbackRequest::StartDirectoryEnumeration { .. } => "StartDirectoryEnumeration",
+            CallbackRequest::EndDirectoryEnumeration { .. } => "EndDirectoryEnumeration",
+            CallbackRequest::GetDirectoryEnumeration { .. } => "GetDirectoryEnumeration",
+            CallbackRequest::Notification { .. } => "Notification",
+        };
+        
+        let timer = perf_monitor.record_callback_start(operation_name);
         
         let result = match request {
             CallbackRequest::GetPlaceholderInfo { callback_data, response } => {
@@ -428,37 +465,74 @@ impl AsyncBridge {
         }
     }
 
-    pub fn send_callback(&self, request: CallbackRequest) -> Result<()> {
-        self.sender.try_send(request)
-            .map_err(|e| {
-                if e.is_full() {
-                    warn!("AsyncBridge queue full, applying backpressure");
-                    WindowsError::QueueFull(DEFAULT_QUEUE_SIZE).into()
-                } else {
-                    error!("AsyncBridge channel closed");
-                    WindowsError::ChannelClosed.into()
+    pub fn send_callback(&self, request: CallbackRequest) -> Result<CancellationToken> {
+        if !self.is_running.load(AtomicOrdering::Relaxed) {
+            return Err(WindowsError::ServiceNotRunning.into());
+        }
+
+        let handle = self.runtime_handle.clone();
+        let queue = self.priority_queue.clone();
+        let metrics = self.metrics.clone();
+        let perf_monitor = self.performance_monitor.clone();
+        
+        let priority = TaskPriority::from_request(&request);
+        let sequence = queue.sequence_counter.fetch_add(1, AtomicOrdering::SeqCst);
+        
+        let token = handle.block_on(async {
+            let current_size = queue.len().await;
+            {
+                let mut m = metrics.lock().unwrap();
+                m.total_requests += 1;
+                m.current_queue_size = current_size;
+                if current_size > m.peak_queue_size {
+                    m.peak_queue_size = current_size;
                 }
-            })
+            }
+            
+            perf_monitor.record_enqueue(priority, sequence);
+            queue.push(request).await
+        });
+
+        Ok(token)
     }
 
-    pub async fn send_callback_async(&self, request: CallbackRequest) -> Result<()> {
-        self.sender.send(request).await
-            .map_err(|_| {
-                error!("AsyncBridge channel closed");
-                WindowsError::ChannelClosed.into()
-            })
+    pub async fn send_callback_async(&self, request: CallbackRequest) -> Result<CancellationToken> {
+        if !self.is_running.load(AtomicOrdering::Relaxed) {
+            return Err(WindowsError::ServiceNotRunning.into());
+        }
+
+        let priority = TaskPriority::from_request(&request);
+        let sequence = self.priority_queue.sequence_counter.fetch_add(1, AtomicOrdering::SeqCst);
+        
+        let current_size = self.priority_queue.len().await;
+        {
+            let mut m = self.metrics.lock().unwrap();
+            m.total_requests += 1;
+            m.current_queue_size = current_size;
+            if current_size > m.peak_queue_size {
+                m.peak_queue_size = current_size;
+            }
+        }
+        
+        self.performance_monitor.record_enqueue(priority, sequence);
+        Ok(self.priority_queue.push(request).await)
     }
 
     pub fn get_metrics(&self) -> BridgeMetrics {
         self.metrics.lock().unwrap().clone()
     }
+    
+    pub fn get_performance_monitor(&self) -> Arc<PerformanceMonitor> {
+        self.performance_monitor.clone()
+    }
+    
+    pub async fn get_performance_report(&self) -> String {
+        self.performance_monitor.generate_report().await
+    }
 
     pub fn shutdown(&mut self) {
-        if let Some(shutdown_tx) = self.shutdown_tx.take() {
-            for _ in 0..self.worker_handles.len() {
-                let _ = shutdown_tx.try_send(());
-            }
-        }
+        self.is_running.store(false, AtomicOrdering::Relaxed);
+        self.shutdown_token.cancel();
 
         for handle in self.worker_handles.drain(..) {
             let _ = handle.join();
