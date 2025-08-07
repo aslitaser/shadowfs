@@ -8,6 +8,7 @@ pub mod xattr_ops;
 pub mod macos_xattr;
 pub mod xattr_cache;
 pub mod finder_integration;
+pub mod mount;
 
 pub use provider::FSKitProvider;
 pub use operations::FSOperationsImpl;
@@ -18,3 +19,4 @@ pub use xattr_ops::XattrOperations;
 pub use macos_xattr::{MacOSXattrHandler, MacOSXattrType, QuarantineData, FinderInfo, finder_flags};
 pub use xattr_cache::{XattrCache, CacheConfig, CacheStats};
 pub use finder_integration::{FinderIntegration, FinderLabel, FinderTag};
+pub use mount::{FSKitMount, FileSystem, MountOptions, MountError, MountInfo, FileSystemStatistics, BrowseVisibility};
