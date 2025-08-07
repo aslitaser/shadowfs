@@ -1,6 +1,6 @@
 //! Fallback mechanisms for feature operations
 
-use crate::error::Result;
+use crate::error::{Result, ShadowError};
 
 /// Fallback mechanism for feature operations
 pub struct FallbackMechanism {
