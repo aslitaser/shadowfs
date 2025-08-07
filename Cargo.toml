@@ -26,7 +26,7 @@ tokio = { version = "1.40", features = ["full"] }
 
 # Logging and errors
 tracing = "0.1.40"
-thiserror = "1.0.63"
+thiserror = "2.0.12"
 anyhow = "1.0.86"
 
 # Serialization
