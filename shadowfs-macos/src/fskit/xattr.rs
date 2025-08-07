@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::io;
 use std::ffi::{OsStr, OsString};
+use super::macos_xattr::{MacOSXattrHandler, MacOSXattrType};
 
 #[cfg(target_os = "macos")]
 use libc::{c_char, c_void, ssize_t};
@@ -41,6 +42,7 @@ pub struct ExtendedAttributesHandler {
     conflict_resolution: ConflictResolution,
     override_attributes: HashMap<PathBuf, HashMap<OsString, Vec<u8>>>,
     deleted_attributes: HashMap<PathBuf, HashSet<OsString>>,
+    macos_handler: MacOSXattrHandler,
 }
 
 impl ExtendedAttributesHandler {
@@ -49,6 +51,25 @@ impl ExtendedAttributesHandler {
             conflict_resolution,
             override_attributes: HashMap::new(),
             deleted_attributes: HashMap::new(),
+            macos_handler: MacOSXattrHandler::new(),
+        }
+    }
+    
+    pub fn new_with_macos_options(
+        conflict_resolution: ConflictResolution,
+        preserve_quarantine: bool,
+        preserve_resource_forks: bool,
+        filter_system_attrs: bool,
+    ) -> Self {
+        Self {
+            conflict_resolution,
+            override_attributes: HashMap::new(),
+            deleted_attributes: HashMap::new(),
+            macos_handler: MacOSXattrHandler::with_options(
+                preserve_quarantine,
+                preserve_resource_forks,
+                filter_system_attrs,
+            ),
         }
     }
 
@@ -70,10 +91,15 @@ impl ExtendedAttributesHandler {
             attrs.extend(override_attrs.keys().cloned());
         }
         
-        Ok(attrs.into_iter().collect())
+        let attr_list: Vec<OsString> = attrs.into_iter().collect();
+        Ok(self.macos_handler.filter_attributes(attr_list))
     }
 
     pub fn get_xattr(&self, path: &Path, name: &OsStr) -> io::Result<Option<Vec<u8>>> {
+        if self.macos_handler.should_filter(name) {
+            return Ok(None);
+        }
+        
         if let Some(deleted) = self.deleted_attributes.get(path) {
             if deleted.contains(name) {
                 return Ok(None);
@@ -82,11 +108,15 @@ impl ExtendedAttributesHandler {
         
         if let Some(override_attrs) = self.override_attributes.get(path) {
             if let Some(value) = override_attrs.get(name) {
-                return Ok(Some(value.clone()));
+                return self.macos_handler.process_xattr(name, value);
             }
         }
         
-        self.get_source_xattr(path, name)
+        if let Some(value) = self.get_source_xattr(path, name)? {
+            self.macos_handler.process_xattr(name, &value)
+        } else {
+            Ok(None)
+        }
     }
 
     pub fn set_xattr(&mut self, path: &Path, name: OsString, value: Vec<u8>, flags: XattrFlags) -> io::Result<()> {
@@ -350,6 +380,49 @@ impl ExtendedAttributesHandler {
         
         Ok(())
     }
+    
+    pub fn has_quarantine(&self, path: &Path) -> io::Result<bool> {
+        let attrs = self.list_xattrs(path, true)?;
+        Ok(MacOSXattrHandler::has_quarantine(&attrs))
+    }
+    
+    pub fn remove_quarantine(&mut self, path: &Path) -> io::Result<()> {
+        let quarantine_name = OsString::from("com.apple.quarantine");
+        self.remove_xattr(path, quarantine_name)
+    }
+    
+    pub fn add_safe_quarantine(&mut self, path: &Path) -> io::Result<()> {
+        let (name, value) = MacOSXattrHandler::create_safe_quarantine();
+        self.set_xattr(path, name, value, XattrFlags::default())
+    }
+    
+    pub fn get_finder_info(&self, path: &Path) -> io::Result<Option<super::macos_xattr::FinderInfo>> {
+        let finder_info_name = OsStr::new("com.apple.FinderInfo");
+        if let Some(value) = self.get_xattr(path, finder_info_name)? {
+            super::macos_xattr::FinderInfo::from_bytes(&value).map(Some)
+        } else {
+            Ok(None)
+        }
+    }
+    
+    pub fn set_finder_info(&mut self, path: &Path, info: &super::macos_xattr::FinderInfo) -> io::Result<()> {
+        let name = OsString::from("com.apple.FinderInfo");
+        let value = info.to_bytes();
+        self.set_xattr(path, name, value, XattrFlags::default())
+    }
+    
+    pub fn is_resource_fork(&self, name: &OsStr) -> bool {
+        MacOSXattrHandler::is_resource_fork(name)
+    }
+    
+    pub fn get_metadata_attrs(&self, path: &Path) -> io::Result<Vec<OsString>> {
+        let attrs = self.list_xattrs(path, true)?;
+        Ok(MacOSXattrHandler::get_metadata_attrs(&attrs))
+    }
+    
+    pub fn identify_xattr_type(&self, name: &OsStr) -> MacOSXattrType {
+        MacOSXattrHandler::identify_xattr_type(name)
+    }
 }
 
 #[cfg(test)]
@@ -420,5 +493,66 @@ mod tests {
         
         assert!(!handler.override_attributes.contains_key(path));
         assert!(!handler.deleted_attributes.contains_key(path));
+    }
+    
+    #[test]
+    fn test_macos_xattr_filtering() {
+        let handler = ExtendedAttributesHandler::new_with_macos_options(
+            ConflictResolution::UseOverride,
+            false,  // Don't preserve quarantine
+            true,   // Preserve resource forks
+            true,   // Filter system attrs
+        );
+        
+        let path = Path::new("/test/file");
+        
+        // Test that quarantine is filtered
+        assert!(handler.macos_handler.should_filter(OsStr::new("com.apple.quarantine")));
+        
+        // Test that resource fork is preserved
+        assert!(!handler.macos_handler.should_filter(OsStr::new("com.apple.ResourceFork")));
+        
+        // Test that system attributes are filtered
+        assert!(handler.macos_handler.should_filter(OsStr::new("com.apple.system.Security")));
+    }
+    
+    #[test]
+    fn test_quarantine_handling() {
+        let mut handler = ExtendedAttributesHandler::new(ConflictResolution::UseOverride);
+        let path = Path::new("/test/file");
+        
+        // Add safe quarantine
+        handler.add_safe_quarantine(path).unwrap();
+        
+        // Check if quarantine exists
+        let has_quarantine = handler.has_quarantine(path).unwrap();
+        assert!(has_quarantine);
+        
+        // Remove quarantine
+        handler.remove_quarantine(path).unwrap();
+        
+        // Check it's gone
+        let has_quarantine = handler.has_quarantine(path).unwrap();
+        assert!(!has_quarantine);
+    }
+    
+    #[test]
+    fn test_xattr_type_identification() {
+        let handler = ExtendedAttributesHandler::new(ConflictResolution::UseOverride);
+        
+        assert_eq!(
+            handler.identify_xattr_type(OsStr::new("com.apple.quarantine")),
+            MacOSXattrType::Quarantine
+        );
+        
+        assert_eq!(
+            handler.identify_xattr_type(OsStr::new("com.apple.FinderInfo")),
+            MacOSXattrType::FinderInfo
+        );
+        
+        assert_eq!(
+            handler.identify_xattr_type(OsStr::new("user.custom")),
+            MacOSXattrType::Regular
+        );
     }
 }
