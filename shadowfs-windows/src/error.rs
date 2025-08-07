@@ -40,6 +40,21 @@ pub enum WindowsError {
     Unsupported {
         message: String,
     },
+    
+    /// Thread creation failed
+    ThreadCreation(String),
+    
+    /// Queue is full
+    QueueFull(usize),
+    
+    /// Channel closed
+    ChannelClosed,
+    
+    /// Async processing error
+    AsyncProcessing(String),
+    
+    /// Service not running
+    ServiceNotRunning,
 }
 
 impl fmt::Display for WindowsError {
@@ -66,6 +81,21 @@ impl fmt::Display for WindowsError {
             WindowsError::Unsupported { message } => {
                 write!(f, "Unsupported: {}", message)
             }
+            WindowsError::ThreadCreation(msg) => {
+                write!(f, "Thread creation failed: {}", msg)
+            }
+            WindowsError::QueueFull(size) => {
+                write!(f, "Queue is full (size: {})", size)
+            }
+            WindowsError::ChannelClosed => {
+                write!(f, "Channel closed")
+            }
+            WindowsError::AsyncProcessing(msg) => {
+                write!(f, "Async processing error: {}", msg)
+            }
+            WindowsError::ServiceNotRunning => {
+                write!(f, "Service is not running")
+            }
         }
     }
 }
@@ -86,6 +116,23 @@ impl From<windows::core::Error> for WindowsError {
         WindowsError::ProjFSError {
             message: err.message().to_string_lossy(),
             hresult: err.code().0,
+        }
+    }
+}
+
+impl From<WindowsError> for windows::core::Error {
+    fn from(err: WindowsError) -> Self {
+        match err {
+            WindowsError::IoError { code, .. } => {
+                windows::core::Error::from_win32(code)
+            }
+            WindowsError::ProjFSError { hresult, .. } => {
+                windows::core::Error::from(windows::core::HRESULT(hresult))
+            }
+            _ => {
+                // Default to generic error
+                windows::core::Error::from_win32(5) // ERROR_ACCESS_DENIED
+            }
         }
     }
 }
