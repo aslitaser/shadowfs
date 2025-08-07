@@ -4,7 +4,7 @@ use objc2::{
     ClassType, DeclaredClass, ProtocolType,
 };
 use objc2_foundation::{
-    NSData, NSDate, NSDictionary, NSError, NSNumber, NSObject, NSString, NSURL,
+    NSArray, NSData, NSDate, NSDictionary, NSError, NSNumber, NSObject, NSString, NSURL,
 };
 use std::ffi::c_void;
 
