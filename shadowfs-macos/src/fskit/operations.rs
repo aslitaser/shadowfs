@@ -26,21 +26,21 @@ struct OperationsState {
 }
 
 #[derive(Debug, Default)]
-struct OverrideStore {
-    items: HashMap<PathBuf, OverrideItem>,
-    deleted_paths: HashSet<PathBuf>,
+pub(super) struct OverrideStore {
+    pub(super) items: HashMap<PathBuf, OverrideItem>,
+    pub(super) deleted_paths: HashSet<PathBuf>,
 }
 
 #[derive(Debug, Clone)]
-struct OverrideItem {
-    path: PathBuf,
-    item_type: FSItemType,
-    attributes: FileAttributes,
-    data: Option<Vec<u8>>,
+pub(super) struct OverrideItem {
+    pub(super) path: PathBuf,
+    pub(super) item_type: FSItemType,
+    pub(super) attributes: FileAttributes,
+    pub(super) data: Option<Vec<u8>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
-enum FSItemType {
+pub(super) enum FSItemType {
     File,
     Directory,
     SymbolicLink,
@@ -83,6 +83,10 @@ impl FSOperationsImpl {
             override_store: Arc::new(RwLock::new(OverrideStore::default())),
             case_sensitive: false, // Default to case-insensitive for macOS
         }
+    }
+    
+    pub fn get_override_store(&self) -> Arc<RwLock<OverrideStore>> {
+        Arc::clone(&self.override_store)
     }
 
     pub fn new_with_options(provider: Weak<FSKitProvider>, case_sensitive: bool) -> Self {
