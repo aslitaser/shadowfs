@@ -17,6 +17,8 @@ windows = { version = "0.48", features = [
 ] }
 shadowfs-core = { path = "../shadowfs-core" }
 tokio.workspace = true
+tokio-util = "0.7"
+futures = "0.3"
 tracing.workspace = true
 thiserror.workspace = true
 parking_lot = "0.12"
