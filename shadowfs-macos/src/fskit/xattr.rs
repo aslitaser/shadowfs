@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::io;
 use std::ffi::{OsStr, OsString};
 use super::macos_xattr::{MacOSXattrHandler, MacOSXattrType};
+use super::xattr_cache::{XattrCache, CacheConfig};
 
 #[cfg(target_os = "macos")]
 use libc::{c_char, c_void, ssize_t};
@@ -43,6 +44,7 @@ pub struct ExtendedAttributesHandler {
     override_attributes: HashMap<PathBuf, HashMap<OsString, Vec<u8>>>,
     deleted_attributes: HashMap<PathBuf, HashSet<OsString>>,
     macos_handler: MacOSXattrHandler,
+    cache: Option<XattrCache>,
 }
 
 impl ExtendedAttributesHandler {
@@ -52,6 +54,7 @@ impl ExtendedAttributesHandler {
             override_attributes: HashMap::new(),
             deleted_attributes: HashMap::new(),
             macos_handler: MacOSXattrHandler::new(),
+            cache: Some(XattrCache::with_default_config()),
         }
     }
     
@@ -70,7 +73,25 @@ impl ExtendedAttributesHandler {
                 preserve_resource_forks,
                 filter_system_attrs,
             ),
+            cache: Some(XattrCache::with_default_config()),
         }
+    }
+    
+    pub fn new_with_cache(
+        conflict_resolution: ConflictResolution,
+        cache_config: CacheConfig,
+    ) -> Self {
+        Self {
+            conflict_resolution,
+            override_attributes: HashMap::new(),
+            deleted_attributes: HashMap::new(),
+            macos_handler: MacOSXattrHandler::new(),
+            cache: Some(XattrCache::new(cache_config)),
+        }
+    }
+    
+    pub fn disable_cache(&mut self) {
+        self.cache = None;
     }
 
     pub fn list_xattrs(&self, path: &Path, include_source: bool) -> io::Result<Vec<OsString>> {
