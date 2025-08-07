@@ -66,6 +66,7 @@ impl Default for CacheConfig {
 }
 
 /// Extended attributes cache with LRU eviction
+#[derive(Debug)]
 pub struct XattrCache {
     /// The actual cache storage
     cache: Arc<RwLock<HashMap<CacheKey, CacheEntry>>>,
