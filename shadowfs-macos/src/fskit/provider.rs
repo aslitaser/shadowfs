@@ -5,9 +5,8 @@ use std::ffi::c_void;
 use dashmap::DashMap;
 use dispatch::Queue as DispatchQueue;
 use uuid::Uuid;
-use crate::fskit::{FSExtensionPoint, FSVolume};
-use crate::override_store::OverrideStore;
-use crate::stats::FileSystemStats;
+use shadowfs_core::override_store::OverrideStore;
+use shadowfs_core::stats::FileSystemStats;
 
 pub enum QueuePriority {
     High,
@@ -43,14 +42,14 @@ pub struct FileContext {
 }
 
 pub struct FSKitProvider {
-    extension_point: FSExtensionPoint,
-    volume: Option<FSVolume>,
+    config: FSKitConfig,
     source_root: PathBuf,
     mount_point: PathBuf,
     override_store: Arc<OverrideStore>,
     dispatch_queue: DispatchQueue,
     file_handles: DashMap<u64, FileContext>,
     stats: Arc<FileSystemStats>,
+    next_handle_id: AtomicU64,
 }
 
 #[repr(C)]
@@ -156,4 +155,55 @@ pub unsafe fn release_objc<T>(obj: *mut T) {
 
 pub unsafe fn autorelease_objc<T>(obj: *mut T) -> *mut T {
     objc_autorelease(obj as *mut c_void) as *mut T
+}
+
+impl FSKitProvider {
+    pub fn new(config: FSKitConfig) -> Self {
+        let dispatch_queue = match config.dispatch_queue_priority {
+            QueuePriority::High => DispatchQueue::global(dispatch::QueuePriority::High),
+            QueuePriority::Default => DispatchQueue::global(dispatch::QueuePriority::Default),
+            QueuePriority::Low => DispatchQueue::global(dispatch::QueuePriority::Low),
+            QueuePriority::Background => DispatchQueue::global(dispatch::QueuePriority::Background),
+        };
+        
+        Self {
+            config,
+            source_root: PathBuf::new(),
+            mount_point: PathBuf::new(),
+            override_store: Arc::new(OverrideStore::with_defaults()),
+            dispatch_queue,
+            file_handles: DashMap::new(),
+            stats: Arc::new(FileSystemStats::default()),
+            next_handle_id: AtomicU64::new(1),
+        }
+    }
+    
+    pub fn set_paths(&mut self, source: PathBuf, mount: PathBuf) {
+        self.source_root = source;
+        self.mount_point = mount;
+    }
+    
+    pub fn allocate_handle(&self) -> u64 {
+        self.next_handle_id.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+    }
+    
+    pub fn register_handle(&self, handle_id: u64, context: FileContext) {
+        self.file_handles.insert(handle_id, context);
+    }
+    
+    pub fn get_handle(&self, handle_id: u64) -> Option<dashmap::mapref::one::Ref<u64, FileContext>> {
+        self.file_handles.get(&handle_id)
+    }
+    
+    pub fn remove_handle(&self, handle_id: u64) -> Option<(u64, FileContext)> {
+        self.file_handles.remove(&handle_id)
+    }
+    
+    pub fn override_store(&self) -> &Arc<OverrideStore> {
+        &self.override_store
+    }
+    
+    pub fn stats(&self) -> &Arc<FileSystemStats> {
+        &self.stats
+    }
 }
