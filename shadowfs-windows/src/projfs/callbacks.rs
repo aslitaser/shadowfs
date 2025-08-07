@@ -115,12 +115,24 @@ pub unsafe fn get_context(
 
 /// Helper to convert Windows path to Rust PathBuf
 pub fn windows_path_to_pathbuf(path: &[u16]) -> PathBuf {
-    use std::os::windows::ffi::OsStringExt;
-    use std::ffi::OsString;
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStringExt;
+        use std::ffi::OsString;
+        
+        let len = path.iter().position(|&c| c == 0).unwrap_or(path.len());
+        let os_string = OsString::from_wide(&path[..len]);
+        PathBuf::from(os_string)
+    }
     
-    let len = path.iter().position(|&c| c == 0).unwrap_or(path.len());
-    let os_string = OsString::from_wide(&path[..len]);
-    PathBuf::from(os_string)
+    #[cfg(not(windows))]
+    {
+        // Fallback for non-Windows platforms (for testing/development)
+        use std::ffi::OsString;
+        let len = path.iter().position(|&c| c == 0).unwrap_or(path.len());
+        let string = String::from_utf16_lossy(&path[..len]);
+        PathBuf::from(string)
+    }
 }
 
 /// Helper to convert PCWSTR to Option<String>
@@ -239,7 +251,7 @@ pub extern "system" fn get_directory_enumeration_callback(
         // Get or update the enumeration session
         let (directory_path, continuation_token) = {
             let provider = provider.read();
-            match provider.active_enumerations.get(enumeration_id) {
+            match provider.active_enumerations.get(&*enumeration_id) {
                 Some(session) => {
                     let mut session = session.clone();
                     
@@ -286,7 +298,7 @@ pub extern "system" fn get_directory_enumeration_callback(
                             let file_name_str = file_name.to_string_lossy();
                             
                             // Check if this entry matches the search pattern
-                            let matches = if let Some(ref session) = provider.read().active_enumerations.get(enumeration_id) {
+                            let matches = if let Some(ref session) = provider.read().active_enumerations.get(&*enumeration_id) {
                                 if let Some(ref pattern) = session.search_expression {
                                     // Use ProjFS pattern matching
                                     let pattern_wide = pattern.encode_utf16().chain(std::iter::once(0)).collect::<Vec<u16>>();
@@ -314,9 +326,9 @@ pub extern "system" fn get_directory_enumeration_callback(
                                 LastWriteTime: Default::default(),
                                 ChangeTime: Default::default(),
                                 FileAttributes: if metadata.is_dir() {
-                                    FILE_ATTRIBUTE_DIRECTORY
+                                    FILE_ATTRIBUTE_DIRECTORY.0
                                 } else {
-                                    FILE_ATTRIBUTE_NORMAL
+                                    FILE_ATTRIBUTE_NORMAL.0
                                 },
                             };
                             
@@ -336,7 +348,7 @@ pub extern "system" fn get_directory_enumeration_callback(
                             if result == HRESULT::from_win32(ERROR_INSUFFICIENT_BUFFER.0) {
                                 // Save continuation token
                                 let mut provider = provider.write();
-                                if let Some(mut session) = provider.active_enumerations.get_mut(enumeration_id) {
+                                if let Some(mut session) = provider.active_enumerations.get_mut(&*enumeration_id) {
                                     session.continuation_token = Some(file_name.as_encoded_bytes().to_vec());
                                 }
                                 return S_OK;
@@ -356,7 +368,7 @@ pub extern "system" fn get_directory_enumeration_callback(
         // Clear continuation token when enumeration is complete
         {
             let mut provider = provider.write();
-            if let Some(mut session) = provider.active_enumerations.get_mut(enumeration_id) {
+            if let Some(mut session) = provider.active_enumerations.get_mut(&*enumeration_id) {
                 session.continuation_token = None;
             }
         }
@@ -394,7 +406,7 @@ pub extern "system" fn end_directory_enumeration_callback(
         // Remove the enumeration session
         let removed = {
             let mut provider = provider.write();
-            provider.active_enumerations.remove(enumeration_id)
+            provider.active_enumerations.remove(&*enumeration_id)
         };
         
         // Log the operation
