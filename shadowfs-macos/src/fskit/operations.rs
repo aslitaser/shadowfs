@@ -1,11 +1,12 @@
 use super::provider::FSKitProvider;
+use super::xattr::{ExtendedAttributesHandler, XattrFlags, ConflictResolution};
 use objc2::rc::Weak;
 use objc2::{msg_send, msg_send_id, ClassType};
 use objc2::runtime::{AnyObject, ProtocolObject};
 use std::sync::{Arc, RwLock};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::ffi::CStr;
+use std::ffi::{CStr, OsStr, OsString};
 
 #[cfg(unix)]
 use libc;
@@ -15,6 +16,7 @@ pub struct FSOperationsImpl {
     provider: Weak<FSKitProvider>,
     state: Arc<RwLock<OperationsState>>,
     override_store: Arc<RwLock<OverrideStore>>,
+    xattr_handler: Arc<RwLock<ExtendedAttributesHandler>>,
     case_sensitive: bool,
 }
 
@@ -81,6 +83,7 @@ impl FSOperationsImpl {
             provider,
             state: Arc::new(RwLock::new(OperationsState::default())),
             override_store: Arc::new(RwLock::new(OverrideStore::default())),
+            xattr_handler: Arc::new(RwLock::new(ExtendedAttributesHandler::new(ConflictResolution::UseOverride))),
             case_sensitive: false, // Default to case-insensitive for macOS
         }
     }
@@ -94,6 +97,7 @@ impl FSOperationsImpl {
             provider,
             state: Arc::new(RwLock::new(OperationsState::default())),
             override_store: Arc::new(RwLock::new(OverrideStore::default())),
+            xattr_handler: Arc::new(RwLock::new(ExtendedAttributesHandler::new(ConflictResolution::UseOverride))),
             case_sensitive,
         }
     }
@@ -1067,6 +1071,99 @@ impl FSOperationsImpl {
 
         Ok(state.open_files.len())
     }
+
+    pub fn getxattr(&self, path: &Path, name: &OsStr, buffer: Option<&mut [u8]>) -> Result<usize, String> {
+        let xattr_handler = self.xattr_handler.read()
+            .map_err(|e| format!("Failed to acquire xattr handler lock: {}", e))?;
+        
+        match xattr_handler.get_xattr(path, name) {
+            Ok(Some(value)) => {
+                if let Some(buffer) = buffer {
+                    if buffer.len() < value.len() {
+                        return Err(format!("Buffer too small: need {} bytes, got {}", value.len(), buffer.len()));
+                    }
+                    buffer[..value.len()].copy_from_slice(&value);
+                }
+                Ok(value.len())
+            },
+            Ok(None) => {
+                Err("Extended attribute not found".to_string())
+            },
+            Err(e) => {
+                Err(format!("Failed to get extended attribute: {}", e))
+            }
+        }
+    }
+
+    pub fn setxattr(&self, path: &Path, name: OsString, value: Vec<u8>, flags: XattrFlags) -> Result<(), String> {
+        let mut xattr_handler = self.xattr_handler.write()
+            .map_err(|e| format!("Failed to acquire xattr handler lock: {}", e))?;
+        
+        xattr_handler.set_xattr(path, name, value, flags)
+            .map_err(|e| format!("Failed to set extended attribute: {}", e))
+    }
+
+    pub fn removexattr(&self, path: &Path, name: OsString) -> Result<(), String> {
+        let mut xattr_handler = self.xattr_handler.write()
+            .map_err(|e| format!("Failed to acquire xattr handler lock: {}", e))?;
+        
+        xattr_handler.remove_xattr(path, name)
+            .map_err(|e| format!("Failed to remove extended attribute: {}", e))
+    }
+
+    pub fn listxattr(&self, path: &Path, buffer: Option<&mut [u8]>) -> Result<usize, String> {
+        let xattr_handler = self.xattr_handler.read()
+            .map_err(|e| format!("Failed to acquire xattr handler lock: {}", e))?;
+        
+        let attrs = xattr_handler.list_xattrs(path, true)
+            .map_err(|e| format!("Failed to list extended attributes: {}", e))?;
+        
+        let mut total_size = 0;
+        for attr in &attrs {
+            total_size += attr.len() + 1;
+        }
+        
+        if let Some(buffer) = buffer {
+            if buffer.len() < total_size {
+                return Err(format!("Buffer too small: need {} bytes, got {}", total_size, buffer.len()));
+            }
+            
+            let mut offset = 0;
+            for attr in attrs {
+                let attr_bytes = attr.as_encoded_bytes();
+                buffer[offset..offset + attr_bytes.len()].copy_from_slice(attr_bytes);
+                offset += attr_bytes.len();
+                buffer[offset] = 0;
+                offset += 1;
+            }
+        }
+        
+        Ok(total_size)
+    }
+
+    pub fn getxattr_size(&self, path: &Path, name: &OsStr) -> Result<usize, String> {
+        self.getxattr(path, name, None)
+    }
+
+    pub fn listxattr_size(&self, path: &Path) -> Result<usize, String> {
+        self.listxattr(path, None)
+    }
+
+    pub fn copy_xattrs(&self, from: &Path, to: &Path) -> Result<(), String> {
+        let mut xattr_handler = self.xattr_handler.write()
+            .map_err(|e| format!("Failed to acquire xattr handler lock: {}", e))?;
+        
+        xattr_handler.copy_attributes(from, to)
+            .map_err(|e| format!("Failed to copy extended attributes: {}", e))
+    }
+
+    pub fn clear_xattrs(&self, path: &Path) -> Result<(), String> {
+        let mut xattr_handler = self.xattr_handler.write()
+            .map_err(|e| format!("Failed to acquire xattr handler lock: {}", e))?;
+        
+        xattr_handler.clear_overrides(path);
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1094,6 +1191,7 @@ macro_rules! class {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::provider::FSKitProvider;
 
     #[test]
     fn test_operations_state_initialization() {
@@ -1116,5 +1214,89 @@ mod tests {
         assert_eq!(handle.path.to_str().unwrap(), "/test/file.txt");
         assert_eq!(handle.flags, 0x01);
         assert_eq!(handle.ref_count, 1);
+    }
+
+    #[test]
+    fn test_xattr_operations() {
+        use std::rc::Rc;
+        
+        let provider = Rc::new(FSKitProvider::new());
+        let weak_provider = Rc::downgrade(&provider);
+        let ops = FSOperationsImpl::new(weak_provider);
+        
+        let path = Path::new("/test/file.txt");
+        let attr_name = OsString::from("user.test");
+        let attr_value = b"test value".to_vec();
+        
+        let result = ops.setxattr(path, attr_name.clone(), attr_value.clone(), XattrFlags::default());
+        assert!(result.is_ok());
+        
+        let mut buffer = vec![0u8; 100];
+        let result = ops.getxattr(path, &attr_name, Some(&mut buffer));
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), attr_value.len());
+        assert_eq!(&buffer[..attr_value.len()], &attr_value[..]);
+    }
+
+    #[test]
+    fn test_xattr_size_query() {
+        use std::rc::Rc;
+        
+        let provider = Rc::new(FSKitProvider::new());
+        let weak_provider = Rc::downgrade(&provider);
+        let ops = FSOperationsImpl::new(weak_provider);
+        
+        let path = Path::new("/test/file.txt");
+        let attr_name = OsString::from("user.test");
+        let attr_value = b"test value".to_vec();
+        
+        ops.setxattr(path, attr_name.clone(), attr_value.clone(), XattrFlags::default()).unwrap();
+        
+        let size = ops.getxattr_size(path, &attr_name);
+        assert!(size.is_ok());
+        assert_eq!(size.unwrap(), attr_value.len());
+    }
+
+    #[test]
+    fn test_xattr_list() {
+        use std::rc::Rc;
+        
+        let provider = Rc::new(FSKitProvider::new());
+        let weak_provider = Rc::downgrade(&provider);
+        let ops = FSOperationsImpl::new(weak_provider);
+        
+        let path = Path::new("/test/file.txt");
+        let attr1 = OsString::from("user.test1");
+        let attr2 = OsString::from("user.test2");
+        
+        ops.setxattr(path, attr1.clone(), b"value1".to_vec(), XattrFlags::default()).unwrap();
+        ops.setxattr(path, attr2.clone(), b"value2".to_vec(), XattrFlags::default()).unwrap();
+        
+        let size = ops.listxattr_size(path);
+        assert!(size.is_ok());
+        
+        let mut buffer = vec![0u8; size.unwrap()];
+        let result = ops.listxattr(path, Some(&mut buffer));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_xattr_remove() {
+        use std::rc::Rc;
+        
+        let provider = Rc::new(FSKitProvider::new());
+        let weak_provider = Rc::downgrade(&provider);
+        let ops = FSOperationsImpl::new(weak_provider);
+        
+        let path = Path::new("/test/file.txt");
+        let attr_name = OsString::from("user.test");
+        
+        ops.setxattr(path, attr_name.clone(), b"value".to_vec(), XattrFlags::default()).unwrap();
+        
+        let result = ops.removexattr(path, attr_name.clone());
+        assert!(result.is_ok());
+        
+        let result = ops.getxattr(path, &attr_name, None);
+        assert!(result.is_err());
     }
 }
