@@ -96,21 +96,21 @@ jobs:
       
       - name: Upload artifacts (Linux)
         if: matrix.platform == 'linux'
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: shadowfs-linux-x86_64
           path: target/release/shadowfs
       
       - name: Upload artifacts (Windows)
         if: matrix.platform == 'windows'
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: shadowfs-windows-x86_64.exe
           path: target/release/shadowfs.exe
       
       - name: Upload artifacts (macOS)
         if: matrix.platform == 'macos'
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: shadowfs-macos-x86_64
           path: target/release/shadowfs
