@@ -7,7 +7,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-fuser = "0.13"
+fuser = "0.15"
 libc = "0.2"
 shadowfs-core = { path = "../shadowfs-core" }
 tokio.workspace = true
