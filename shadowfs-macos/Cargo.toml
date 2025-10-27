@@ -11,7 +11,7 @@ objc = "0.2"
 objc2 = "0.5"
 objc2-foundation = "0.3"
 block2 = "0.5"
-core-foundation = "0.9"
+core-foundation = "0.10"
 shadowfs-core = { path = "../shadowfs-core" }
 tokio.workspace = true
 tracing.workspace = true
